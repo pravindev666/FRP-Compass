@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 
 # ── Dev Mode ──────────────────────────────────────────────────────────────────
 # Set DEV_MODE = True to bypass Supabase and use dummy credentials
-DEV_MODE = True
+DEV_MODE = False
 
 DEV_ACCOUNTS = {
     "admin@frp.dev":    {"password": "admin123", "role": "admin", "id": "dev-admin-001"},
@@ -708,7 +708,11 @@ def show_auth():
                     user, err = login_user(email, pwd)
                     if user:
                         st.session_state.user = user
-                        st.session_state.is_admin = (email.lower() == ADMIN_EMAIL.lower())
+                        
+                        # Support multiple admins separated by commas
+                        admin_list = [a.strip().lower() for a in ADMIN_EMAIL.split(',')]
+                        st.session_state.is_admin = (email.lower() in admin_list)
+                        
                         st.rerun()
                     else:
                         st.error(f"Login failed: {err}")

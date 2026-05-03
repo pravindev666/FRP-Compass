@@ -1,0 +1,10 @@
+
+git init
+git add .
+git commit -m "HaShem Help me with this 3 commit"
+git branch -M main
+git remote add origin git@github.com:pravindev666/FRP-Compass.git
+git push -u origin main
+
+Supabase
+Pravinmathew@613

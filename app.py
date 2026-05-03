@@ -695,12 +695,9 @@ def show_auth():
     </div>
     """, unsafe_allow_html=True)
     
-    col_theme, _ = st.columns([1, 4])
-    with col_theme:
-        _sidebar_theme_toggle()
-
     col = st.columns([1, 2, 1])[1]
     with col:
+        _sidebar_theme_toggle()
         tab_login, tab_signup = st.tabs(["🔑 Login", "📝 Sign Up"])
 
         with tab_login:

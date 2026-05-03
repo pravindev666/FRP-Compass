@@ -1312,6 +1312,60 @@ def show_admin_cohort_view():
 
     st.markdown("---")
     
+    # ── Cohort Breakdown (Stacked Bar Chart) ──
+    st.markdown("### 📊 Cohort Phase Breakdown")
+    if all_data:
+        # Get all unique weeks
+        all_weeks = sorted(df["entry_date"].unique(), reverse=True)
+        sel_admin_week = st.selectbox("📅 Select Week for Comparison", all_weeks, index=0, key="admin_cohort_week")
+        
+        bar_data = []
+        # Filter data for the selected week
+        week_data = df[df["entry_date"] == sel_admin_week]
+        
+        for c in companies:
+            uid = c["user_id"]
+            c_rows = week_data[week_data["user_id"] == uid]
+            
+            # For each company, we want a row for each phase
+            for ph in PHASE_ORDER:
+                ph_max = sum(v["max"] for v in PHASES[ph]["pillars"].values())
+                # Get latest score for this phase in this week
+                ph_score = c_rows[c_rows["phase"] == ph]["score_value"].sum()
+                # Contribution to the 100% total (each phase is 20% of the total 100%)
+                contribution = (ph_score / ph_max * 20) if ph_max else 0
+                
+                bar_data.append({
+                    "Company": c["company_name"],
+                    "Phase": ph,
+                    "Score contribution (%)": contribution,
+                    "Phase Readiness (%)": int(ph_score/ph_max*100) if ph_max else 0
+                })
+        
+        df_bar = pd.DataFrame(bar_data)
+        
+        if not df_bar.empty:
+            color_map = {ph: PHASES[ph]["color"] for ph in PHASE_ORDER}
+            fig_bar = px.bar(df_bar, x="Company", y="Score contribution (%)", color="Phase",
+                             color_discrete_map=color_map, barmode="stack",
+                             hover_name="Company", 
+                             hover_data={"Phase": True, "Phase Readiness (%)": True, "Score contribution (%)": False},
+                             height=500)
+            
+            fig_bar.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#94a3b8", margin=dict(l=20, r=20, t=50, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            fig_bar.update_xaxes(tickangle=45, gridcolor="rgba(148,163,184,0.1)")
+            fig_bar.update_yaxes(range=[0, 105], gridcolor="rgba(148,163,184,0.1)", title="Overall Readiness %")
+            
+            st.plotly_chart(fig_bar, width="stretch")
+        else:
+            st.info("No data entries for the selected week.")
+
+    st.markdown("---")
+    
     # ── Search & Smart Filters ──
     st.markdown("### 🔍 Search & Filters")
     c_f1, c_f2 = st.columns([2, 1])
@@ -1389,76 +1443,8 @@ def show_admin_cohort_view():
 
         st.divider()
 
-    # ── Cohort Leaderboard (Scatter Plot) ──
-    st.markdown("### 🌌 Cohort Comparisons")
-    if all_data:
-        c_ctrl1, c_ctrl2 = st.columns(2)
-        with c_ctrl1:
-            x_axis = st.selectbox("Compare X-Axis", PHASE_ORDER, index=0)
-        with c_ctrl2:
-            y_axis = st.selectbox("Compare Y-Axis", PHASE_ORDER, index=min(2, len(PHASE_ORDER)-1))
+    # Company list section continues...
 
-        scatter_data = []
-        heatmap_data = []
-        for c in companies:
-            uid = c["user_id"]
-            rows = [r for r in all_data if r["user_id"] == uid]
-            
-            # Calculate Phase Scores
-            phase_scores = {}
-            for ph in PHASE_ORDER:
-                ph_max = sum(v["max"] for v in PHASES[ph]["pillars"].values())
-                seen = {}
-                for r in [row for row in rows if row["phase"] == ph]:
-                    key = r["pillar"]
-                    if key not in seen or r["entry_date"] > seen[key][0]:
-                        seen[key] = (r["entry_date"], r["score_value"])
-                ph_total = sum(v for _, v in seen.values())
-                pct = int(ph_total / ph_max * 100) if ph_max else 0
-                phase_scores[ph] = pct
-                heatmap_data.append({"Company": c["company_name"], "Phase": ph, "Score %": pct})
-                
-            total, max_t = latest_score(uid)
-            overall_pct = (total / max_t * 100) if max_t else 0
-            
-            scatter_data.append({
-                "Company": c["company_name"],
-                "Founder": c["founder_name"],
-                f"{x_axis} Score": phase_scores.get(x_axis, 0),
-                f"{y_axis} Score": phase_scores.get(y_axis, 0),
-                "Overall Readiness": overall_pct
-            })
-            
-        df_scatter = pd.DataFrame(scatter_data)
-        df_heat = pd.DataFrame(heatmap_data)
-
-        col_left, col_right = st.columns([3, 2])
-
-        with col_left:
-            st.markdown(f"#### 🎯 {x_axis} vs {y_axis}")
-            fig_scatter = px.scatter(df_scatter, x=f"{x_axis} Score", y=f"{y_axis} Score", 
-                                     size="Overall Readiness", color="Overall Readiness",
-                                     hover_name="Company", hover_data=["Founder", "Overall Readiness"],
-                                     color_continuous_scale="Viridis", size_max=20)
-            fig_scatter.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="#94a3b8", margin=dict(l=20, r=20, t=20, b=20)
-            )
-            fig_scatter.update_xaxes(range=[-5, 105], gridcolor="rgba(148,163,184,0.1)")
-            fig_scatter.update_yaxes(range=[-5, 105], gridcolor="rgba(148,163,184,0.1)")
-            st.plotly_chart(fig_scatter, use_container_width=True)
-
-        with col_right:
-            st.markdown("#### 🌡️ Phase Readiness")
-            pivot_heat = df_heat.pivot(index="Company", columns="Phase", values="Score %")
-            pivot_heat = pivot_heat.reindex(columns=PHASE_ORDER)
-            fig_heat = px.imshow(pivot_heat, color_continuous_scale="RdYlGn", origin="lower", text_auto=True)
-            fig_heat.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="#94a3b8", margin=dict(l=10, r=10, t=10, b=10),
-                coloraxis_showscale=False
-            )
-            st.plotly_chart(fig_heat, width="stretch")
 
 def show_admin_deep_dive(target):
     uid = target["user_id"]

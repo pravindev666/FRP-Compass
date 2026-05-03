@@ -751,6 +751,23 @@ def init_session():
     # No need to explicitly set session here as get_supabase() handles it
     pass
 
+# ── DIALOGS ──
+@st.dialog("Verify Your Email")
+def signup_success_dialog():
+    st.markdown("""
+    <div style="text-align:center;">
+        <h2 style="font-size:3rem; margin-bottom:1rem;">📧</h2>
+        <p style="font-size:1.1rem; font-weight:500;">Go to your email and click the link to verify your account.</p>
+        <p class="tm" style="font-size:0.9rem; margin-top:1rem; padding:12px; background:rgba(0,0,0,0.03); border-radius:8px;">
+            Don't worry if the link opens a blank page—just come back here to log in once you've clicked it.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.button("Close & Go to Login", use_container_width=True, type="primary"):
+        # Reset user in session state so they stay on auth page to log in
+        st.session_state.user = None
+        st.rerun()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AUTH PAGE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -823,7 +840,7 @@ def show_auth():
                         if is_admin:
                             st.success("Admin account created! 📧 Please check your email (if enabled) and then Login.")
                         else:
-                            st.success("Account created! 📧 Please check your email and click the confirmation link before logging in. (If the link opens a blank page, you can close it and return here to log in).")
+                            signup_success_dialog()
                     else:
                         st.error(f"Signup failed: {err}")
 

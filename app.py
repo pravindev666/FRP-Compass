@@ -698,8 +698,7 @@ def db_load_user_history(user_id):
     if not client: return []
     
     try:
-        # Complex join via RPC or explicit join
-        # For simplicity in this step, we fetch submissions for the user's company
+        # Fetch submissions for the user's company
         res = client.table("weekly_submissions")\
             .select("*, companies!inner(user_id)")\
             .eq("companies.user_id", user_id)\
@@ -750,42 +749,28 @@ def db_delete_company(company_id):
     except Exception as e:
         st.error(f"Delete Error: {e}")
         return False, 0
-    if DEV_MODE:
-        return sorted(set(r["entry_date"] for r in _load_dev_db() if r["user_id"] == user_id))
-    client = get_supabase()
-    if not client: return []
-    try:
-        res = client.table("frp_entries").select("entry_date").eq("user_id", user_id).execute()
-        return sorted(set(r["entry_date"] for r in (res.data or [])))
-    except:
-        return []
 
 def restore_user_session(user_id):
     """Fetch the most recent entry from DB and restore session state."""
-    entries = db_load_entries(user_id)
-    if not entries:
-        return
+    # Fetch from the new history table
+    history = db_load_user_history(user_id)
+    if not history: return
     
-    # Sort by date descending
-    df = pd.DataFrame(entries)
-    df["entry_date"] = pd.to_datetime(df["entry_date"])
-    latest_date = df["entry_date"].max()
-    latest_rows = df[df["entry_date"] == latest_date]
+    # Pre-fill from the latest submission
+    latest = history[0]
+    sid = latest["id"]
     
-    # Restore basic info
-    first_row = latest_rows.iloc[0]
-    st.session_state.company = first_row.get("company_name", "")
-    st.session_state.founder = first_row.get("founder_name", "")
-    st.session_state.selected_week = latest_date.strftime("%Y-%m-%d")
+    # Restore company details from the join if present, else fallback
+    if "companies" in latest and latest["companies"]:
+        st.session_state.company = latest["companies"].get("company_name", "")
+        st.session_state.founder = latest["companies"].get("founder_name", "")
     
-    # Restore answers for all weeks (to populate analytics)
-    # Answers structure: {phase: {pillar: score}}
-    new_answers = {}
-    # We actually only want to pre-fill the form with the LATEST week's answers
-    for _, row in latest_rows.iterrows():
-        new_answers.setdefault(row["phase"], {})[row["pillar"]] = row["score_value"]
+    st.session_state.selected_week = latest["week_start"]
     
-    st.session_state.answers = new_answers
+    # Load granular answers
+    granular = db_load_full_answers(sid)
+    for ans in granular:
+        st.session_state.answers.setdefault(ans["phase"], {})[ans["pillar"]] = ans["score"]
 
 def login_user(email, password):
     # ── Dev mode: check dummy credentials ──
@@ -999,18 +984,47 @@ def show_sidebar_user():
         st.session_state.selected_week = st.date_input("Select Friday date", value=date.today()).isoformat()
 
         st.divider()
-        # Upload JSON to resume
-        st.markdown("### 📂 Upload Previous Data")
-        uploaded = st.file_uploader("Upload JSON (v1/v2...)", type="json", key="upload_json")
-        if uploaded:
-            try:
-                data = json.load(uploaded)
-                st.session_state.answers  = data.get("answers", {})
-                st.session_state.company  = data.get("company", st.session_state.company)
-                st.session_state.founder  = data.get("founder", st.session_state.founder)
-                st.success("Data loaded! You can now edit and re-save.")
-            except:
-                st.error("Invalid JSON file.")
+        with st.expander("💾 Backup & Restore (JSON)"):
+            st.markdown('<p style="font-size:0.7rem;">Use this to move your data between devices or back up your progress.</p>', unsafe_allow_html=True)
+            
+            # Download
+            current_data = {
+                "company": st.session_state.company,
+                "founder": st.session_state.founder,
+                "week": str(st.session_state.selected_week),
+                "answers": st.session_state.answers
+            }
+            st.download_button(
+                "📥 Download Backup",
+                data=json.dumps(current_data, indent=2),
+                file_name=f"FRP_Backup_{datetime.now().strftime('%Y%m%d')}.json",
+                mime="application/json",
+                use_container_width=True,
+                key="sidebar_download_json"
+            )
+            
+            # Upload / Restore
+            uploaded_file = st.file_uploader("📤 Restore from Backup", type=["json"], key="sidebar_upload_json")
+            if uploaded_file:
+                try:
+                    data = json.load(uploaded_file)
+                    st.session_state.company = data.get("company", "")
+                    st.session_state.founder = data.get("founder", "")
+                    st.session_state.answers = data.get("answers", {})
+                    
+                    # Save to DB immediately
+                    if db_save_full_submission(
+                        st.session_state.user.id,
+                        st.session_state.company,
+                        st.session_state.founder,
+                        st.session_state.selected_week,
+                        st.session_state.answers
+                    ):
+                        st.success("✅ Data restored and saved to cloud!")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Invalid file: {e}")
 
         st.divider()
         if st.button("🚪 Logout", use_container_width=True):
@@ -1131,16 +1145,17 @@ def show_analytics(uid=None, company_override=None):
     # Load historical submissions
     history = db_load_user_history(target_uid) if target_uid else []
     
-    # Get the latest submission for initial display if session is empty
-    latest_sub = history[0] if history else None
-    
-    # If session state is empty, pre-fill from latest DB submission
-    if not any(st.session_state.answers.values()) and latest_sub:
-        granular = db_load_full_answers(latest_sub["id"])
+    # Process history for charts
+    all_entries = []
+    for sub in history:
+        granular = db_load_full_answers(sub["id"])
         for ans in granular:
-            st.session_state.answers.setdefault(ans["phase"], {})[ans["pillar"]] = ans["score"]
-
-    session_answers = st.session_state.answers
+            all_entries.append({
+                "entry_date": sub["week_start"],
+                "phase": ans["phase"],
+                "pillar": ans["pillar"],
+                "score_value": ans["score"]
+            })
 
     st.markdown(f"""
     <div class="hero">
@@ -1155,14 +1170,7 @@ def show_analytics(uid=None, company_override=None):
     cols = st.columns(len(PHASE_ORDER))
     for i, ph in enumerate(PHASE_ORDER):
         phase = PHASES[ph]
-        ph_ans = session_answers.get(ph, {})
-
-        # Fill from DB if session is empty
-        if not ph_ans and ph in answers:
-            for pil, dates in answers[ph].items():
-                latest_dt = max(dates.keys())
-                ph_ans[pil] = dates[latest_dt]
-
+        ph_ans = st.session_state.answers.get(ph, {})
         total, max_s = phase_score(ph, ph_ans)
         pct = int(total / max_s * 100) if max_s else 0
         color = phase["color"]

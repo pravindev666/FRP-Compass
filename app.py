@@ -689,7 +689,7 @@ def logout_user():
     if supabase:
         try: supabase.auth.sign_out()
         except: pass
-    for k in ["user", "is_admin", "company", "founder", "answers", "selected_week", "sb_access_token", "sb_refresh_token"]:
+    for k in ["user", "is_admin", "company", "founder", "answers", "selected_week", "sb_access_token", "sb_refresh_token", "admin_target"]:
         st.session_state.pop(k, None)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -935,11 +935,11 @@ def show_phase_input(phase_key):
     """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    # Protection: Hide Save button if viewing as Admin
-    if st.session_state.get("admin_target"):
+    # Protection: Only show View-Only if Admin is viewing a target
+    if st.session_state.is_admin and st.session_state.get("admin_target"):
         st.info("💡 You are in View-Only mode for this company.")
     else:
-        if st.button(f"💾 Save {phase_key} Entry", use_container_width=True, key=f"save_{phase_key}"):
+        if st.button(f"💾 Save {phase_key} Entry", width="stretch", key=f"save_{phase_key}"):
             if not st.session_state.company or not st.session_state.founder:
                 st.error("Set Company & Founder name in sidebar first.")
             else:
@@ -950,8 +950,8 @@ def show_phase_input(phase_key):
                     if not ok: ok_all = False
                 if ok_all:
                     st.success(f"✅ {phase_key} saved for {st.session_state.selected_week}. Please click the next tab above to continue.")
-                    if pct >= 80:
-                        st.balloons()
+                    st.balloons()
+                    st.rerun()
                 else:
                     st.warning("Saved locally. Check Supabase connection.")
 

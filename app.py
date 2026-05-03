@@ -654,6 +654,23 @@ def db_load_all_companies():
         print(f"Error loading all companies: {e}")
         return []
 
+def db_delete_company(user_id):
+    """Delete all entries for a specific user/company (Admin only)"""
+    if DEV_MODE:
+        db = _load_dev_db()
+        db = [row for row in db if row["user_id"] != user_id]
+        _save_dev_db(db)
+        return True
+    
+    client = get_supabase()
+    if not client: return False
+    try:
+        client.table("frp_entries").delete().eq("user_id", user_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Delete Error: {e}")
+        return False
+
 def db_get_weeks(user_id):
     if DEV_MODE:
         return sorted(set(r["entry_date"] for r in _load_dev_db() if r["user_id"] == user_id))
@@ -771,12 +788,12 @@ def signup_success_dialog():
 def signup_welcome_dialog():
     st.markdown("""
     <div style="text-align:center;">
-        <h2 style="font-size:3rem; margin-bottom:1rem;">🎉</h2>
-        <p style="font-size:1.2rem; font-weight:600; color:#10b981;">Account Created Successfully!</p>
-        <p style="font-size:1rem; margin-top:0.5rem;">Welcome to the Founder Readiness Program. Your journey starts now.</p>
+        <h2 style="font-size:3rem; margin-bottom:1rem;">🚀</h2>
+        <p style="font-size:1.2rem; font-weight:600; color:#10b981;">Welcome to FRP Tracker!</p>
+        <p style="font-size:1rem; margin-top:0.5rem;">Your account has been created successfully. Since email verification is disabled, you can jump right in!</p>
     </div>
     """, unsafe_allow_html=True)
-    if st.button("🚀 Enter Dashboard", use_container_width=True, type="primary"):
+    if st.button("Start Tracking Now →", use_container_width=True, type="primary"):
         st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1414,7 +1431,7 @@ def show_admin_cohort_view():
         pct    = co["pct"]
         color  = score_color(pct)
 
-        col_a, col_spark, col_b, col_c = st.columns([3, 2, 1, 1])
+        col_a, col_spark, col_b, col_c, col_d = st.columns([3, 2, 1, 1, 0.6])
         
         # Column A: Info
         col_a.markdown(f"""
@@ -1454,6 +1471,23 @@ def show_admin_cohort_view():
         if col_c.button("View →", key=f"view_{uid}", use_container_width=True):
             st.session_state.admin_target = co
             st.rerun()
+
+        # Column D: Delete
+        if col_d.button("🗑️", key=f"del_{uid}", help=f"Delete ALL data for {co['company_name']}"):
+            st.session_state[f"confirm_delete_{uid}"] = True
+
+        # Inline confirmation
+        if st.session_state.get(f"confirm_delete_{uid}"):
+            st.error(f"Permanently delete **{co['company_name']}**?")
+            c_del1, c_del2 = st.columns(2)
+            if c_del1.button("Delete", key=f"y_del_{uid}", type="primary"):
+                if db_delete_company(uid):
+                    st.success(f"Deleted {co['company_name']}")
+                    del st.session_state[f"confirm_delete_{uid}"]
+                    st.rerun()
+            if c_del2.button("Cancel", key=f"n_del_{uid}"):
+                del st.session_state[f"confirm_delete_{uid}"]
+                st.rerun()
 
         st.divider()
 

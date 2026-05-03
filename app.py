@@ -33,15 +33,31 @@ class _DevUser:
         self.id = uid
         self.email = email
 
-# ── Supabase ──────────────────────────────────────────────────────────────────
-try:
-    from supabase import create_client, Client
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-    SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-    ADMIN_EMAIL  = os.environ.get("ADMIN_EMAIL", "admin@frp.dev")   # matches dev account
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
-except Exception:
-    supabase = None
+# ── Supabase Setup ──
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+ADMIN_EMAIL  = os.environ.get("ADMIN_EMAIL", "admin@frp.dev")
+
+def get_supabase() -> Client:
+    """Get or create a per-session Supabase client."""
+    if "supabase_client" not in st.session_state:
+        if SUPABASE_URL and SUPABASE_KEY:
+            st.session_state.supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        else:
+            st.session_state.supabase_client = None
+    
+    # Ensure auth session is synced from session state if it exists
+    client = st.session_state.supabase_client
+    if client and st.session_state.get("sb_access_token") and st.session_state.get("sb_refresh_token"):
+        try:
+            # Check if current client auth matches our session state
+            # If not, sync it.
+            curr_session = client.auth.get_session()
+            if not curr_session or curr_session.access_token != st.session_state["sb_access_token"]:
+                client.auth.set_session(st.session_state["sb_access_token"], st.session_state["sb_refresh_token"])
+        except:
+            pass
+    return client
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -588,9 +604,10 @@ def db_save_entry(user_id, company, founder, phase, pillar, value, week_date):
         _save_dev_db(db)
         return True
 
-    if not supabase: return False
+    client = get_supabase()
+    if not client: return False
     try:
-        supabase.table("frp_entries").upsert({
+        client.table("frp_entries").upsert({
             "user_id": user_id, "company_name": company, "founder_name": founder,
             "phase": phase, "pillar": pillar, "score_value": value,
             "entry_date": str(week_date), "updated_at": datetime.utcnow().isoformat(),
@@ -604,9 +621,10 @@ def db_load_entries(user_id, entry_date=None):
     if DEV_MODE:
         return [row for row in _load_dev_db() if row["user_id"] == user_id and (not entry_date or row["entry_date"] == str(entry_date))]
     
-    if not supabase: return []
+    client = get_supabase()
+    if not client: return []
     try:
-        q = supabase.table("frp_entries").select("*").eq("user_id", user_id)
+        q = client.table("frp_entries").select("*").eq("user_id", user_id)
         if entry_date: q = q.eq("entry_date", str(entry_date))
         return q.execute().data or []
     except:
@@ -614,9 +632,10 @@ def db_load_entries(user_id, entry_date=None):
 
 def db_load_all_companies():
     if DEV_MODE: return _load_dev_db()
-    if not supabase: return []
+    client = get_supabase()
+    if not client: return []
     try:
-        res = supabase.table("frp_entries").select("user_id,company_name,founder_name,entry_date,phase,pillar,score_value").execute()
+        res = client.table("frp_entries").select("user_id,company_name,founder_name,entry_date,phase,pillar,score_value").execute()
         return res.data or []
     except Exception as e:
         print(f"Error loading all companies: {e}")
@@ -625,9 +644,10 @@ def db_load_all_companies():
 def db_get_weeks(user_id):
     if DEV_MODE:
         return sorted(set(r["entry_date"] for r in _load_dev_db() if r["user_id"] == user_id))
-    if not supabase: return []
+    client = get_supabase()
+    if not client: return []
     try:
-        res = supabase.table("frp_entries").select("entry_date").eq("user_id", user_id).execute()
+        res = client.table("frp_entries").select("entry_date").eq("user_id", user_id).execute()
         return sorted(set(r["entry_date"] for r in (res.data or [])))
     except:
         return []
@@ -667,9 +687,10 @@ def login_user(email, password):
             return _DevUser(account["id"], email.lower()), None, None
         return None, None, "Invalid dev credentials. Use admin@frp.dev/admin123 or user@frp.dev/user123"
 
-    if not supabase: return None, None, "Supabase not configured"
+    client = get_supabase()
+    if not client: return None, None, "Supabase not configured"
     try:
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        res = client.auth.sign_in_with_password({"email": email, "password": password})
         return res.user, res.session, None
     except Exception as e:
         return None, None, str(e)
@@ -678,16 +699,18 @@ def signup_user(email, password):
     if DEV_MODE:
         return None, None, "Sign-up disabled in DEV_MODE. Use the pre-set dev accounts."
 
-    if not supabase: return None, None, "Supabase not configured"
+    client = get_supabase()
+    if not client: return None, None, "Supabase not configured"
     try:
-        res = supabase.auth.sign_up({"email": email, "password": password})
+        res = client.auth.sign_up({"email": email, "password": password})
         return res.user, res.session, None
     except Exception as e:
         return None, None, str(e)
 
 def logout_user():
-    if supabase:
-        try: supabase.auth.sign_out()
+    client = get_supabase()
+    if client:
+        try: client.auth.sign_out()
         except: pass
     for k in ["user", "is_admin", "company", "founder", "answers", "selected_week", "sb_access_token", "sb_refresh_token", "admin_target"]:
         st.session_state.pop(k, None)
@@ -711,12 +734,9 @@ def init_session():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Restore Supabase session across Streamlit reruns
-    if supabase and st.session_state.get("sb_access_token") and st.session_state.get("sb_refresh_token"):
-        try:
-            supabase.auth.set_session(st.session_state["sb_access_token"], st.session_state["sb_refresh_token"])
-        except Exception:
-            pass
+    # Supabase client is now lazy-loaded via get_supabase()
+    # No need to explicitly set session here as get_supabase() handles it
+    pass
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AUTH PAGE
@@ -1487,6 +1507,9 @@ def show_admin_deep_dive(target):
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     init_session()
+    
+    # Warm up Supabase client
+    get_supabase()
 
     # ── Single CSS injection for current theme ──
     st.markdown(build_css(st.session_state.theme), unsafe_allow_html=True)

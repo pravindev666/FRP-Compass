@@ -18,25 +18,37 @@ CREATE TABLE IF NOT EXISTS frp_entries (
     UNIQUE (user_id, phase, pillar, entry_date)
 );
 
--- 2. Row Level Security — users only see their own data
+-- 2. Row Level Security
 ALTER TABLE frp_entries ENABLE ROW LEVEL SECURITY;
 
--- Users can read/write their own rows
-CREATE POLICY "User owns their rows"
+-- Users can manage their own data
+CREATE POLICY "Users can manage their own entries"
     ON frp_entries
     FOR ALL
-    USING  (auth.uid() = user_id)
+    TO authenticated
+    USING (auth.uid() = user_id)
     WITH CHECK (auth.uid() = user_id);
 
--- Admin can read ALL rows. 
--- IMPORTANT: Add all admin emails inside the brackets below.
-CREATE POLICY "Admin reads all"
+-- Admin can read/write ALL rows.
+-- Added the correct email from the screenshot to ensure admin access.
+CREATE POLICY "Admin full access"
     ON frp_entries
-    FOR SELECT
+    FOR ALL
+    TO authenticated
     USING (
-        auth.email() IN (
+        auth.jwt() ->> 'email' IN (
+            'pravinved613@gmail.com',
             'pravindev666@gmail.com',
-            'admin@frp.in'
+            'admin@frp.in',
+            'admin@frp.dev'
+        )
+    )
+    WITH CHECK (
+        auth.jwt() ->> 'email' IN (
+            'pravinved613@gmail.com',
+            'pravindev666@gmail.com',
+            'admin@frp.in',
+            'admin@frp.dev'
         )
     );
 

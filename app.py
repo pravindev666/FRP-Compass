@@ -1345,58 +1345,6 @@ def show_admin_cohort_view():
 
     st.markdown("---")
     
-    # ── Cohort Breakdown (Stacked Bar Chart) ──
-    st.markdown("### 📊 Cohort Phase Breakdown")
-    if all_data:
-        # Get all unique weeks
-        all_weeks = sorted(df["entry_date"].unique(), reverse=True)
-        sel_admin_week = st.selectbox("📅 Select Week for Comparison", all_weeks, index=0, key="admin_cohort_week")
-        
-        bar_data = []
-        # Filter data for the selected week
-        week_data = df[df["entry_date"] == sel_admin_week]
-        
-        for c in companies:
-            uid = c["user_id"]
-            c_rows = week_data[week_data["user_id"] == uid]
-            
-            # For each company, we want a row for each phase
-            for ph in PHASE_ORDER:
-                ph_max = sum(v["max"] for v in PHASES[ph]["pillars"].values())
-                # Get latest score for this phase in this week
-                ph_score = c_rows[c_rows["phase"] == ph]["score_value"].sum()
-                # Contribution to the 100% total (each phase is 20% of the total 100%)
-                contribution = (ph_score / ph_max * 20) if ph_max else 0
-                
-                bar_data.append({
-                    "Company": c["company_name"],
-                    "Phase": ph,
-                    "Score contribution (%)": contribution,
-                    "Phase Readiness (%)": int(ph_score/ph_max*100) if ph_max else 0
-                })
-        
-        df_bar = pd.DataFrame(bar_data)
-        
-        if not df_bar.empty:
-            color_map = {ph: PHASES[ph]["color"] for ph in PHASE_ORDER}
-            fig_bar = px.bar(df_bar, x="Company", y="Score contribution (%)", color="Phase",
-                             color_discrete_map=color_map, barmode="stack",
-                             hover_name="Company", 
-                             hover_data={"Phase": True, "Phase Readiness (%)": True, "Score contribution (%)": False},
-                             height=500)
-            
-            fig_bar.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="#94a3b8", margin=dict(l=20, r=20, t=50, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            fig_bar.update_xaxes(tickangle=45, gridcolor="rgba(148,163,184,0.1)")
-            fig_bar.update_yaxes(range=[0, 105], gridcolor="rgba(148,163,184,0.1)", title="Overall Readiness %")
-            
-            st.plotly_chart(fig_bar, width="stretch")
-        else:
-            st.info("No data entries for the selected week.")
-
     st.markdown("---")
     
     # ── Search & Smart Filters ──

@@ -1215,7 +1215,30 @@ def show_user_app():
 # ─────────────────────────────────────────────────────────────────────────────
 def show_admin_app():
     show_sidebar_admin()
+    
+    # ── Breadcrumb Navigation Logic ──
+    target = st.session_state.get("admin_target")
+    
+    if target:
+        # Deep Dive View
+        st.markdown(f"""
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+            <div style="background:#4f46e5; color:white; padding:4px 12px; border-radius:20px; font-size:0.8rem; font-weight:600;">Admin Panel</div>
+            <div style="color:#64748b; font-size:1.2rem;">/</div>
+            <div style="font-weight:600; font-size:1rem; color:#1e293b;">Viewing: {target['company_name']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("← Back to Cohort Dashboard", use_container_width=True):
+            st.session_state.admin_target = None
+            st.rerun()
+            
+        show_admin_deep_dive(target)
+    else:
+        # Main Cohort View
+        show_admin_cohort_view()
 
+def show_admin_cohort_view():
     st.markdown("""
     <div class="hero">
         <div class="pill">Admin Panel</div>
@@ -1225,7 +1248,6 @@ def show_admin_app():
     """, unsafe_allow_html=True)
 
     all_data = db_load_all_companies()
-
     if not all_data:
         st.info("No data yet. Founders need to submit their weekly entries first.")
         return
@@ -1247,24 +1269,137 @@ def show_admin_app():
         total = sum(v for _, v in seen.values())
         return total, max_t
 
+    # ── Master CSV Export ──
+    master_rows = []
+    for c in companies:
+        uid = c["user_id"]
+        t, mx = latest_score(uid)
+        row = {"user_id": uid, "Company": c["company_name"], "Founder": c["founder_name"], "Overall Readiness %": int(t/mx*100) if mx else 0}
+        
+        # Add phase-specific columns
+        for ph in PHASE_ORDER:
+            ph_max = sum(v["max"] for v in PHASES[ph]["pillars"].values())
+            ph_rows = [r for r in all_data if r["user_id"] == uid and r["phase"] == ph]
+            ph_seen = {}
+            for r in ph_rows:
+                if r["pillar"] not in ph_seen or r["entry_date"] > ph_seen[r["pillar"]][0]:
+                    ph_seen[r["pillar"]] = (r["entry_date"], r["score_value"])
+            ph_score = sum(v for _, v in ph_seen.values())
+            row[f"{ph} %"] = int(ph_score/ph_max*100) if ph_max else 0
+        master_rows.append(row)
+    
+    master_df = pd.DataFrame(master_rows)
+    
+    col_t1, col_t2 = st.columns([4, 1])
+    with col_t2:
+        st.download_button(
+            "📥 Export Master CSV",
+            data=master_df.to_csv(index=False),
+            file_name=f"FRP_Cohort_Report_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="admin_master_export"
+        )
+
     # ── Stats row ──
     total_cos = len(companies)
-    avg_score = 0
-    if companies:
-        scores = [latest_score(c["user_id"])[0] for c in companies]
-        avg_score = sum(scores) / len(scores) if scores else 0
+    avg_pct = master_df["Overall Readiness %"].mean() if not master_df.empty else 0
 
     c1, c2, c3 = st.columns(3)
-    for col, val, lbl in [(c1, total_cos, "Total Companies"), (c2, f"{avg_score:.0f}", "Avg Score"), (c3, "90", "Day Program")]:
+    for col, val, lbl in [(c1, total_cos, "Total Companies"), (c2, f"{avg_pct:.0f}%", "Avg Cohort Readiness"), (c3, "90", "Day Program")]:
         col.markdown(f"""<div class="stat"><div class="stat-val">{val}</div>
         <div class="stat-lbl">{lbl}</div></div>""", unsafe_allow_html=True)
 
     st.markdown("---")
     
+    # ── Search & Smart Filters ──
+    st.markdown("### 🔍 Search & Filters")
+    c_f1, c_f2 = st.columns([2, 1])
+    with c_f1:
+        search = st.text_input("Type company or founder name", placeholder="Search...", label_visibility="collapsed")
+    with c_f2:
+        filter_mode = st.radio("Status Filter", ["All", "🏆 Top", "⚠️ At Risk"], horizontal=True, label_visibility="collapsed")
+
+    # Apply search
+    filtered = [c for c in companies if
+                search.lower() in c["company_name"].lower() or
+                search.lower() in c["founder_name"].lower()] if search else companies
+    
+    # Apply status filters
+    final_list = []
+    for co in filtered:
+        uid = co["user_id"]
+        # Use master_df for quick lookups
+        t, mx = latest_score(uid)
+        pct = int(t/mx*100) if mx else 0
+        
+        if filter_mode == "🏆 Top" and pct < 75: continue
+        if filter_mode == "⚠️ At Risk" and pct >= 40: continue
+        
+        co["pct"] = pct
+        final_list.append(co)
+
+    # Company list
+    st.markdown(f"### 🏢 Companies ({len(final_list)})")
+    for co in final_list:
+        uid    = co["user_id"]
+        pct    = co["pct"]
+        color  = score_color(pct)
+
+        col_a, col_spark, col_b, col_c = st.columns([3, 2, 1, 1])
+        
+        # Column A: Info
+        col_a.markdown(f"""
+        <div>
+            <div class="tp" style="font-weight:700;font-size:1.1rem;color:#1e293b;">{co['company_name']}</div>
+            <div class="tm" style="font-size:0.8rem;color:#64748b;">👤 {co['founder_name']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Column Spark: Trajectory
+        with col_spark:
+            user_rows = [r for r in all_data if r["user_id"] == uid]
+            if user_rows:
+                df_u = pd.DataFrame(user_rows)
+                daily = df_u.groupby("entry_date")["score_value"].sum().reset_index()
+                daily = daily.sort_values("entry_date")
+                
+                # Plotly Sparkline
+                fig_spark = px.line(daily, x="entry_date", y="score_value")
+                fig_spark.update_layout(
+                    height=40, width=120, margin=dict(l=5, r=5, t=5, b=5),
+                    xaxis_visible=False, yaxis_visible=False,
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
+                )
+                fig_spark.update_traces(line_color=color, line_width=2.5)
+                st.plotly_chart(fig_spark, use_container_width=False, config={'displayModeBar': False})
+        
+        # Column B: Score
+        col_b.markdown(f"""
+        <div style="text-align:center;">
+            <div style="color:{color};font-weight:800;font-size:1.4rem;">{pct}%</div>
+            <div style="font-size:0.6rem;text-decoration:uppercase;color:#94a3b8;">Readiness</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Column C: Action
+        if col_c.button("View →", key=f"view_{uid}", use_container_width=True):
+            st.session_state.admin_target = co
+            st.rerun()
+
+        st.divider()
+
     # ── Cohort Leaderboard (Scatter Plot) ──
-    st.markdown("### 🌌 Cohort Leaderboard")
+    st.markdown("### 🌌 Cohort Comparisons")
     if all_data:
+        c_ctrl1, c_ctrl2 = st.columns(2)
+        with c_ctrl1:
+            x_axis = st.selectbox("Compare X-Axis", PHASE_ORDER, index=0)
+        with c_ctrl2:
+            y_axis = st.selectbox("Compare Y-Axis", PHASE_ORDER, index=min(2, len(PHASE_ORDER)-1))
+
         scatter_data = []
+        heatmap_data = []
         for c in companies:
             uid = c["user_id"]
             rows = [r for r in all_data if r["user_id"] == uid]
@@ -1279,7 +1414,9 @@ def show_admin_app():
                     if key not in seen or r["entry_date"] > seen[key][0]:
                         seen[key] = (r["entry_date"], r["score_value"])
                 ph_total = sum(v for _, v in seen.values())
-                phase_scores[ph] = (ph_total / ph_max * 100) if ph_max else 0
+                pct = int(ph_total / ph_max * 100) if ph_max else 0
+                phase_scores[ph] = pct
+                heatmap_data.append({"Company": c["company_name"], "Phase": ph, "Score %": pct})
                 
             total, max_t = latest_score(uid)
             overall_pct = (total / max_t * 100) if max_t else 0
@@ -1287,85 +1424,41 @@ def show_admin_app():
             scatter_data.append({
                 "Company": c["company_name"],
                 "Founder": c["founder_name"],
-                "PSF Score": phase_scores.get("PSF", 0),
-                "GTM Score": phase_scores.get("GTM", 0),
+                f"{x_axis} Score": phase_scores.get(x_axis, 0),
+                f"{y_axis} Score": phase_scores.get(y_axis, 0),
                 "Overall Readiness": overall_pct
             })
             
         df_scatter = pd.DataFrame(scatter_data)
-        fig_scatter = px.scatter(df_scatter, x="PSF Score", y="GTM Score", 
-                                 size="Overall Readiness", color="Overall Readiness",
-                                 hover_name="Company", hover_data=["Founder", "Overall Readiness"],
-                                 color_continuous_scale="Viridis", size_max=20)
-        fig_scatter.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#94a3b8", margin=dict(l=20, r=20, t=20, b=20)
-        )
-        fig_scatter.update_xaxes(range=[-5, 105], gridcolor="rgba(148,163,184,0.1)")
-        fig_scatter.update_yaxes(range=[-5, 105], gridcolor="rgba(148,163,184,0.1)")
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        df_heat = pd.DataFrame(heatmap_data)
 
-    st.markdown("---")
+        col_left, col_right = st.columns([3, 2])
 
-    # ── Search ──
-    st.markdown("### 🔍 Search or Select a Company")
-    search = st.text_input("Type company or founder name", placeholder="Search...", label_visibility="collapsed")
+        with col_left:
+            st.markdown(f"#### 🎯 {x_axis} vs {y_axis}")
+            fig_scatter = px.scatter(df_scatter, x=f"{x_axis} Score", y=f"{y_axis} Score", 
+                                     size="Overall Readiness", color="Overall Readiness",
+                                     hover_name="Company", hover_data=["Founder", "Overall Readiness"],
+                                     color_continuous_scale="Viridis", size_max=20)
+            fig_scatter.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#94a3b8", margin=dict(l=20, r=20, t=20, b=20)
+            )
+            fig_scatter.update_xaxes(range=[-5, 105], gridcolor="rgba(148,163,184,0.1)")
+            fig_scatter.update_yaxes(range=[-5, 105], gridcolor="rgba(148,163,184,0.1)")
+            st.plotly_chart(fig_scatter, use_container_width=True)
 
-    filtered = [c for c in companies if
-                search.lower() in c["company_name"].lower() or
-                search.lower() in c["founder_name"].lower()] if search else companies
-
-    # Company list
-    st.markdown("### 🏢 All Companies")
-    for co in filtered:
-        uid    = co["user_id"]
-        t, mx  = latest_score(uid)
-        pct    = int(t / mx * 100) if mx else 0
-        color  = score_color(pct)
-
-        col_a, col_b, col_c = st.columns([3, 1, 1])
-        col_a.markdown(f"""
-        <div>
-            <div class="tp" style="font-weight:700;font-size:1rem;">{co['company_name']}</div>
-            <div class="tm" style="font-size:0.8rem;">👤 {co['founder_name']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        col_b.markdown(f"<div style='color:{color};font-weight:800;font-size:1.2rem;text-align:center;'>{pct}</div>", unsafe_allow_html=True)
-        if col_c.button("View →", key=f"view_{uid}"):
-            st.session_state.admin_target = co
-            st.rerun()
-
-        st.divider()
-
-    # ── Individual company view ──
-    if st.session_state.get("admin_target"):
-        co  = st.session_state.admin_target
-        uid = co["user_id"]
-        st.markdown(f"---\n### 📈 Viewing: {co['company_name']}")
-
-        # Load all weekly entries for this user
-        entries = db_load_entries(uid)
-        if not entries:
-            st.info("No entries for this company yet.")
-        else:
-            df_e = pd.DataFrame(entries)
-            weeks = sorted(df_e["entry_date"].unique(), reverse=True)
-            sel_week = st.selectbox("Select week", weeks, key="admin_week_select")
-
-            week_entries = df_e[df_e["entry_date"] == sel_week]
-            week_answers = {}
-            for _, row in week_entries.iterrows():
-                week_answers.setdefault(row["phase"], {})[row["pillar"]] = row["score_value"]
-
-            # Temporarily override session for analytics display
-            saved = st.session_state.answers
-            st.session_state.answers = week_answers
-            show_analytics(uid=uid, company_override=co["company_name"])
-            st.session_state.answers = saved
-
-        if st.button("← Back to list"):
-            st.session_state.admin_target = None
-            st.rerun()
+        with col_right:
+            st.markdown("#### 🌡️ Phase Readiness")
+            pivot_heat = df_heat.pivot(index="Company", columns="Phase", values="Score %")
+            pivot_heat = pivot_heat.reindex(columns=PHASE_ORDER)
+            fig_heat = px.imshow(pivot_heat, color_continuous_scale="RdYlGn", origin="lower", text_auto=True)
+            fig_heat.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#94a3b8", margin=dict(l=10, r=10, t=10, b=10),
+                coloraxis_showscale=False
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN

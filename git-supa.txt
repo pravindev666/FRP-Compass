@@ -1,10 +1,18 @@
 
 git init
 git add .
-git commit -m "HaShem Help me with this 3 commit"
+git commit -m "HaShem Help me with this 5 commit"
 git branch -M main
 git remote add origin git@github.com:pravindev666/FRP-Compass.git
 git push -u origin main
 
 Supabase
 Pravinmathew@613
+
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlybHNjdmdjaHhoZG1jamlpaW5mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3OTM4MzMsImV4cCI6MjA5MzM2OTgzM30.NojO1VG_0dD0AYGo9IyLkJANKu7BFksfsaalhX6o1uw
+
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlybHNjdmdjaHhoZG1jamlpaW5mIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Nzc5MzgzMywiZXhwIjoyMDkzMzY5ODMzfQ.CAsft6_iaAtIRwkLV7sLsYXzmlifIa9PaEoDbEAqUyg
+
+SUPABASE_URL = "https://your-project-url.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5c..."
+ADMIN_EMAIL = "your-actual-email@startup.in"

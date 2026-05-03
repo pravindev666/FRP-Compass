@@ -726,7 +726,6 @@ def show_auth():
     <div class="hero" style="text-align:center;max-width:480px;margin:4rem auto 2rem;">
         <div class="pill">Founder Readiness Program</div>
         <h1 style="font-size:1.8rem;">🚀 FRP Tracker</h1>
-        <p>PSF → PMF → GTM → Revenue → Funding</p>
     </div>
     """, unsafe_allow_html=True)
     

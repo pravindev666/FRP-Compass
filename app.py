@@ -1222,14 +1222,14 @@ def show_admin_app():
     if target:
         # Deep Dive View
         st.markdown(f"""
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+        <div class="no-print" style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
             <div style="background:#4f46e5; color:white; padding:4px 12px; border-radius:20px; font-size:0.8rem; font-weight:600;">Admin Panel</div>
             <div style="color:#64748b; font-size:1.2rem;">/</div>
             <div style="font-weight:600; font-size:1rem; color:#1e293b;">Viewing: {target['company_name']}</div>
         </div>
         """, unsafe_allow_html=True)
         
-        if st.button("← Back to Cohort Dashboard", use_container_width=True):
+        if st.button("← Back to Cohort Dashboard", use_container_width=True, key="back_to_cohort"):
             st.session_state.admin_target = None
             st.rerun()
             
@@ -1463,7 +1463,7 @@ def show_admin_cohort_view():
 def show_admin_deep_dive(target):
     uid = target["user_id"]
     st.markdown(f"""
-    <div class="card" style="border-top: 4px solid #4f46e5;">
+    <div class="card no-print" style="border-top: 4px solid #4f46e5;">
         <h2 style="margin:0;">📈 Deep Dive: {target['company_name']}</h2>
         <p style="color:#64748b; margin:4px 0 0;">Founder: {target['founder_name']} | Accessing live trajectory data.</p>
     </div>

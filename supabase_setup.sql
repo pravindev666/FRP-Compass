@@ -28,13 +28,16 @@ CREATE POLICY "User owns their rows"
     USING  (auth.uid() = user_id)
     WITH CHECK (auth.uid() = user_id);
 
--- Admin can read ALL rows  
--- Replace 'admin@frp.in' with your actual admin email
+-- Admin can read ALL rows. 
+-- IMPORTANT: Add all admin emails inside the brackets below.
 CREATE POLICY "Admin reads all"
     ON frp_entries
     FOR SELECT
     USING (
-        auth.email() = 'admin@frp.in'
+        auth.email() IN (
+            'pravindev666@gmail.com',
+            'admin@frp.in'
+        )
     );
 
 -- 3. Index for fast queries

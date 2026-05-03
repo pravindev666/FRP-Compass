@@ -618,7 +618,8 @@ def db_load_all_companies():
     try:
         res = supabase.table("frp_entries").select("user_id,company_name,founder_name,entry_date,phase,pillar,score_value").execute()
         return res.data or []
-    except:
+    except Exception as e:
+        print(f"Error loading all companies: {e}")
         return []
 
 def db_get_weeks(user_id):
@@ -879,21 +880,25 @@ def show_phase_input(phase_key):
     """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button(f"💾 Save {phase_key} Entry", use_container_width=True, key=f"save_{phase_key}"):
-        if not st.session_state.company or not st.session_state.founder:
-            st.error("Set Company & Founder name in sidebar first.")
-        else:
-            ok_all = True
-            for pillar, val in ph_answers.items():
-                ok = db_save_entry(uid, st.session_state.company, st.session_state.founder,
-                                   phase_key, pillar, val, st.session_state.selected_week)
-                if not ok: ok_all = False
-            if ok_all:
-                st.success(f"✅ {phase_key} saved for {st.session_state.selected_week}. Please click the next tab above to continue.")
-                if pct >= 80:
-                    st.balloons()
+    # Protection: Hide Save button if viewing as Admin
+    if st.session_state.get("admin_target"):
+        st.info("💡 You are in View-Only mode for this company.")
+    else:
+        if st.button(f"💾 Save {phase_key} Entry", use_container_width=True, key=f"save_{phase_key}"):
+            if not st.session_state.company or not st.session_state.founder:
+                st.error("Set Company & Founder name in sidebar first.")
             else:
-                st.warning("Saved locally. Check Supabase connection.")
+                ok_all = True
+                for pillar, val in ph_answers.items():
+                    ok = db_save_entry(uid, st.session_state.company, st.session_state.founder,
+                                       phase_key, pillar, val, st.session_state.selected_week)
+                    if not ok: ok_all = False
+                if ok_all:
+                    st.success(f"✅ {phase_key} saved for {st.session_state.selected_week}. Please click the next tab above to continue.")
+                    if pct >= 80:
+                        st.balloons()
+                else:
+                    st.warning("Saved locally. Check Supabase connection.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ANALYTICS TAB
@@ -954,9 +959,21 @@ def show_analytics(uid=None, company_override=None):
     # ── 90-Day Journey Analytics ──
     st.markdown("### 🗺️ The 90-Day Journey")
     
-    col_print, _ = st.columns([2, 4])
+    col_print, col_dl = st.columns([4, 2])
     with col_print:
         st.info("💡 **Tip:** Press **Ctrl+P** (or Cmd+P) to save this dashboard as a beautifully formatted PDF report.", icon="🖨️")
+    
+    with col_dl:
+        if all_entries:
+            df_dl = pd.DataFrame(all_entries)
+            csv = df_dl.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download CSV Report",
+                data=csv,
+                file_name=f"FRP_Report_{company or 'Founder'}.csv",
+                mime='text/csv',
+                use_container_width=True
+            )
         
     if all_entries:
         df = pd.DataFrame(all_entries)

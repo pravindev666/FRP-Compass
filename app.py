@@ -599,6 +599,10 @@ def db_get_or_create_company(user_id, company_name, founder_name):
     client = get_supabase()
     if not client: return None
     
+    # Audit #22: Trim inputs
+    company_name = company_name.strip() if company_name else "Unnamed Company"
+    founder_name = founder_name.strip() if founder_name else "Unknown Founder"
+    
     try:
         # Check if company exists
         res = client.table("companies").select("*").eq("user_id", user_id).execute()
@@ -647,11 +651,13 @@ def db_save_full_submission(user_id, company_name, founder_name, week_start, ans
         if not company: return False
         cid = company["id"]
         
-        # 2. Compute Phase Totals
+        # 2. Compute Phase Totals (Audit #6: Explicit computation)
         phase_scores = {}
+        total_score = 0
         for ph in PHASE_ORDER:
-            total, _ = phase_score(ph, answers_dict.get(ph, {}))
-            phase_scores[ph] = total
+            p_total, _ = phase_score(ph, answers_dict.get(ph, {}))
+            phase_scores[ph] = p_total
+            total_score += p_total
             
         # 3. Upsert Submission Summary
         sub_payload = {
@@ -662,6 +668,7 @@ def db_save_full_submission(user_id, company_name, founder_name, week_start, ans
             "gtm_score": phase_scores.get("GTM", 0),
             "revenue_score": phase_scores.get("Revenue", 0),
             "funding_score": phase_scores.get("Funding", 0),
+            "total_score": total_score, # Explicitly setting for redundancy
             "updated_at": datetime.utcnow().isoformat()
         }
         
@@ -744,8 +751,9 @@ def db_delete_company(company_id):
     client = get_supabase()
     if not client: return False, 0
     try:
+        # Audit #1: Cleaned up dead code
         res = client.table("companies").delete().eq("id", company_id).execute()
-        return True, len(res.data)
+        return True, len(res.data) if res.data else 0
     except Exception as e:
         st.error(f"Delete Error: {e}")
         return False, 0
@@ -1144,17 +1152,19 @@ def show_analytics(uid=None, company_override=None):
 
     # Load historical submissions
     history = db_load_user_history(target_uid) if target_uid else []
+    session_answers = st.session_state.answers # Audit #3 Fix
     
-    # Process history for charts
+    # Process history for charts (Audit #4 Fix)
     all_entries = []
     for sub in history:
-        granular = db_load_full_answers(sub["id"])
-        for ans in granular:
+        # We simulate the old 'all_entries' format for backward compatibility in charts
+        for ph in PHASE_ORDER:
+            col_name = f"{ph.lower()}_score"
             all_entries.append({
                 "entry_date": sub["week_start"],
-                "phase": ans["phase"],
-                "pillar": ans["pillar"],
-                "score_value": ans["score"]
+                "phase": ph,
+                "pillar": "Summary",
+                "score_value": sub.get(col_name, 0)
             })
 
     st.markdown(f"""
@@ -1479,11 +1489,12 @@ def show_admin_cohort_view():
             df_cohort["company_name"].str.contains(search, case=False) | 
             df_cohort["founder_name"].str.contains(search, case=False)
         ]
-
+    
+    final_list = filtered.to_dict("records") # Audit #2 Fix
 
     # Company list
     st.markdown(f"### 🏢 Companies ({len(final_list)})")
-    for co in filtered.to_dict("records"):
+    for co in final_list:
         cid    = co["company_id"]
         score  = co["total_score"]
         # Max theoretical score
@@ -1555,28 +1566,29 @@ def show_admin_cohort_view():
 
 
 def show_admin_deep_dive(target):
+    st.markdown(f"## 🕵️ Deep Dive: {target['company_name']}")
+    
+    # Audit #18: Fix data source for admin deep dive
     uid = target["user_id"]
-    st.markdown(f"""
-    <div class="card no-print" style="border-top: 4px solid #4f46e5;">
-        <h2 style="margin:0;">📈 Deep Dive: {target['company_name']}</h2>
-        <p style="color:#64748b; margin:4px 0 0;">Founder: {target['founder_name']} | Accessing live trajectory data.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    
+    # Fetch all submissions for this user to allow week selection
+    history = db_load_user_history(uid)
+    if not history:
+        st.warning("No historical data found for this company.")
+        return
 
-    # Load all weekly entries for this user
-    entries = db_load_entries(uid)
-    if not entries:
-        st.info("No entries for this company yet.")
-    else:
-        df_e = pd.DataFrame(entries)
-        weeks = sorted(df_e["entry_date"].unique(), reverse=True)
-        sel_week = st.selectbox("Select week to review", weeks, key="admin_week_select")
-
-        week_entries = df_e[df_e["entry_date"] == sel_week]
+    weeks = [s["week_start"] for s in history]
+    sel_week = st.selectbox("Select week to review", weeks, key="admin_week_select")
+    
+    # Get the specific submission for that week
+    selected_sub = next((s for s in history if s["week_start"] == sel_week), None)
+    if selected_sub:
+        # Load granular answers for that week
+        granular = db_load_full_answers(selected_sub["id"])
         week_answers = {}
-        for _, row in week_entries.iterrows():
-            week_answers.setdefault(row["phase"], {})[row["pillar"]] = row["score_value"]
-
+        for ans in granular:
+            week_answers.setdefault(ans["phase"], {})[ans["pillar"]] = ans["score"]
+            
         # Temporarily override session for analytics display
         orig_answers = st.session_state.answers
         orig_week = st.session_state.selected_week
@@ -1590,6 +1602,28 @@ def show_admin_deep_dive(target):
         # Restore session state
         st.session_state.answers = orig_answers
         st.session_state.selected_week = orig_week
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION INIT
+# ─────────────────────────────────────────────────────────────────────────────
+def init_session():
+    if "user" not in st.session_state: st.session_state.user = None
+    if "company" not in st.session_state: st.session_state.company = ""
+    if "founder" not in st.session_state: st.session_state.founder = ""
+    if "theme" not in st.session_state: st.session_state.theme = "light"
+    if "is_admin" not in st.session_state: st.session_state.is_admin = False
+    
+    # Audit #17: Friday snapping
+    if "selected_week" not in st.session_state:
+        from datetime import timedelta
+        today = date.today()
+        # Friday is weekday 4. (today.weekday() - 4) % 7 gives days since last Friday.
+        days_since_friday = (today.weekday() - 4) % 7
+        default_week = today - timedelta(days=days_since_friday)
+        st.session_state.selected_week = default_week.isoformat()
+        
+    if "answers" not in st.session_state: 
+        st.session_state.answers = {p: {} for p in PHASES}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN

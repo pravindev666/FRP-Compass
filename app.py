@@ -658,18 +658,23 @@ def db_delete_company(user_id):
     """Delete all entries for a specific user/company (Admin only)"""
     if DEV_MODE:
         db = _load_dev_db()
+        original_count = len(db)
         db = [row for row in db if row["user_id"] != user_id]
+        deleted_count = original_count - len(db)
         _save_dev_db(db)
-        return True
+        return True, deleted_count
     
     client = get_supabase()
-    if not client: return False
+    if not client: return False, 0
     try:
-        client.table("frp_entries").delete().eq("user_id", user_id).execute()
-        return True
+        # Perform delete and get the count of rows removed
+        res = client.table("frp_entries").delete().eq("user_id", user_id).execute()
+        # In supabase-py, res.data contains the deleted rows
+        deleted_count = len(res.data) if res.data else 0
+        return True, deleted_count
     except Exception as e:
         st.error(f"Delete Error: {e}")
-        return False
+        return False, 0
 
 def db_get_weeks(user_id):
     if DEV_MODE:
@@ -1476,18 +1481,26 @@ def show_admin_cohort_view():
         if col_d.button("🗑️", key=f"del_{uid}", help=f"Delete ALL data for {co['company_name']}"):
             st.session_state[f"confirm_delete_{uid}"] = True
 
-        # Inline confirmation
-        if st.session_state.get(f"confirm_delete_{uid}"):
-            st.error(f"Permanently delete **{co['company_name']}**?")
-            c_del1, c_del2 = st.columns(2)
-            if c_del1.button("Delete", key=f"y_del_{uid}", type="primary"):
-                if db_delete_company(uid):
-                    st.success(f"Deleted {co['company_name']}")
-                    del st.session_state[f"confirm_delete_{uid}"]
-                    st.rerun()
-            if c_del2.button("Cancel", key=f"n_del_{uid}"):
-                del st.session_state[f"confirm_delete_{uid}"]
-                st.rerun()
+                # Inline confirmation
+                if st.session_state.get(f"confirm_delete_{uid}"):
+                    st.error(f"Permanently delete ALL data for **{co['company_name']}**?")
+                    c_del1, c_del2 = st.columns(2)
+                    if c_del1.button("Confirm Delete", key=f"y_del_{uid}", type="primary", use_container_width=True):
+                        success, count = db_delete_company(uid)
+                        if success:
+                            if count > 0:
+                                st.success(f"Successfully deleted {count} entries for {co['company_name']}.")
+                            else:
+                                st.warning(f"No entries found for {co['company_name']} in the database.")
+                            
+                            # Clean up state
+                            del st.session_state[f"confirm_delete_{uid}"]
+                            # Small sleep to let the user see the success message
+                            time.sleep(1.5)
+                            st.rerun()
+                    if c_del2.button("Cancel", key=f"n_del_{uid}", use_container_width=True):
+                        del st.session_state[f"confirm_delete_{uid}"]
+                        st.rerun()
 
         st.divider()
 

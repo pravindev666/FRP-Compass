@@ -11,7 +11,7 @@ import json
 import os
 import io
 import math
-import math
+import time
 from datetime import datetime, date
 import pandas as pd
 import plotly.express as px
@@ -983,6 +983,7 @@ def show_phase_input(phase_key):
                 if ok_all:
                     st.success(f"✅ {phase_key} saved for {st.session_state.selected_week}. Please click the next tab above to continue.")
                     st.balloons()
+                    time.sleep(2.5) # Allow balloons to fly and message to be read
                     st.rerun()
                 else:
                     st.warning("Saved locally. Check Supabase connection.")

@@ -1458,7 +1458,44 @@ def show_admin_cohort_view():
                 font_color="#94a3b8", margin=dict(l=10, r=10, t=10, b=10),
                 coloraxis_showscale=False
             )
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width="stretch")
+
+def show_admin_deep_dive(target):
+    uid = target["user_id"]
+    st.markdown(f"""
+    <div class="card" style="border-top: 4px solid #4f46e5;">
+        <h2 style="margin:0;">📈 Deep Dive: {target['company_name']}</h2>
+        <p style="color:#64748b; margin:4px 0 0;">Founder: {target['founder_name']} | Accessing live trajectory data.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Load all weekly entries for this user
+    entries = db_load_entries(uid)
+    if not entries:
+        st.info("No entries for this company yet.")
+    else:
+        df_e = pd.DataFrame(entries)
+        weeks = sorted(df_e["entry_date"].unique(), reverse=True)
+        sel_week = st.selectbox("Select week to review", weeks, key="admin_week_select")
+
+        week_entries = df_e[df_e["entry_date"] == sel_week]
+        week_answers = {}
+        for _, row in week_entries.iterrows():
+            week_answers.setdefault(row["phase"], {})[row["pillar"]] = row["score_value"]
+
+        # Temporarily override session for analytics display
+        orig_answers = st.session_state.answers
+        orig_week = st.session_state.selected_week
+        
+        st.session_state.answers = week_answers
+        st.session_state.selected_week = sel_week
+        
+        # Reuse existing analytics component
+        show_analytics(uid=uid, company_override=target["company_name"])
+        
+        # Restore session state
+        st.session_state.answers = orig_answers
+        st.session_state.selected_week = orig_week
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN

@@ -637,32 +637,32 @@ def login_user(email, password):
     if DEV_MODE:
         account = DEV_ACCOUNTS.get(email.lower())
         if account and account["password"] == password:
-            return _DevUser(account["id"], email.lower()), None
-        return None, "Invalid dev credentials. Use admin@frp.dev/admin123 or user@frp.dev/user123"
+            return _DevUser(account["id"], email.lower()), None, None
+        return None, None, "Invalid dev credentials. Use admin@frp.dev/admin123 or user@frp.dev/user123"
 
-    if not supabase: return None, "Supabase not configured"
+    if not supabase: return None, None, "Supabase not configured"
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        return res.user, None
+        return res.user, res.session, None
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 def signup_user(email, password):
     if DEV_MODE:
-        return None, "Sign-up disabled in DEV_MODE. Use the pre-set dev accounts."
+        return None, None, "Sign-up disabled in DEV_MODE. Use the pre-set dev accounts."
 
-    if not supabase: return None, "Supabase not configured"
+    if not supabase: return None, None, "Supabase not configured"
     try:
         res = supabase.auth.sign_up({"email": email, "password": password})
-        return res.user, None
+        return res.user, res.session, None
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 def logout_user():
     if supabase:
         try: supabase.auth.sign_out()
         except: pass
-    for k in ["user", "is_admin", "company", "founder", "answers", "selected_week"]:
+    for k in ["user", "is_admin", "company", "founder", "answers", "selected_week", "sb_access_token", "sb_refresh_token"]:
         st.session_state.pop(k, None)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -683,6 +683,13 @@ def init_session():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Restore Supabase session across Streamlit reruns
+    if supabase and st.session_state.get("sb_access_token") and st.session_state.get("sb_refresh_token"):
+        try:
+            supabase.auth.set_session(st.session_state["sb_access_token"], st.session_state["sb_refresh_token"])
+        except Exception:
+            pass
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AUTH PAGE
@@ -706,9 +713,12 @@ def show_auth():
             pwd   = st.text_input("Password", type="password", key="li_pwd")
             if st.button("Login", use_container_width=True, key="btn_login"):
                 if email and pwd:
-                    user, err = login_user(email, pwd)
+                    user, session, err = login_user(email, pwd)
                     if user:
                         st.session_state.user = user
+                        if session:
+                            st.session_state.sb_access_token = session.access_token
+                            st.session_state.sb_refresh_token = session.refresh_token
                         
                         # Support multiple admins separated by commas
                         admin_list = [a.strip().lower() for a in ADMIN_EMAIL.split(',')]
@@ -734,9 +744,20 @@ def show_auth():
                 elif len(s_pwd) < 6:
                     st.error("Password must be at least 6 characters.")
                 else:
-                    user, err = signup_user(s_email, s_pwd)
+                    user, session, err = signup_user(s_email, s_pwd)
                     if user:
-                        st.success("Account created! 📧 Please check your email and click the confirmation link before logging in. (If the link opens a blank page, you can close it and return here to log in).")
+                        st.session_state.user = user
+                        if session:
+                            st.session_state.sb_access_token = session.access_token
+                            st.session_state.sb_refresh_token = session.refresh_token
+                        # Immediately check if this new user should be an admin
+                        admin_list = [a.strip().lower() for a in ADMIN_EMAIL.split(',')]
+                        is_admin = (s_email.lower() in admin_list)
+                        
+                        if is_admin:
+                            st.success("Admin account created! 📧 Please check your email (if enabled) and then Login.")
+                        else:
+                            st.success("Account created! 📧 Please check your email and click the confirmation link before logging in. (If the link opens a blank page, you can close it and return here to log in).")
                     else:
                         st.error(f"Signup failed: {err}")
 

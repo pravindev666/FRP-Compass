@@ -1,64 +1,149 @@
 -- ============================================================
---  FRP Tracker – Supabase Database Setup
+--  FRP Compass - Production Grade Schema
 --  Run this in Supabase → SQL Editor
 -- ============================================================
 
--- 1. FRP Entries table (weekly pillar scores per user)
-CREATE TABLE IF NOT EXISTS frp_entries (
-    id            BIGSERIAL PRIMARY KEY,
-    user_id       UUID         NOT NULL,          -- from supabase auth
-    company_name  TEXT         NOT NULL,
-    founder_name  TEXT         NOT NULL,
-    phase         TEXT         NOT NULL,          -- PSF, PMF, GTM, Revenue, Funding
-    pillar        TEXT         NOT NULL,          -- pillar name within phase
-    score_value   INTEGER      NOT NULL DEFAULT 0,
-    entry_date    DATE         NOT NULL,          -- the Friday date of that week
-    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+-- 0. EXTENSIONS
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-    UNIQUE (user_id, phase, pillar, entry_date)
+-- 1. USERS (Link to Supabase Auth)
+CREATE TABLE IF NOT EXISTS public.users (
+    id          UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email       TEXT UNIQUE NOT NULL,
+    role        TEXT CHECK (role IN ('admin', 'user')) DEFAULT 'user',
+    created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. Row Level Security
-ALTER TABLE frp_entries ENABLE ROW LEVEL SECURITY;
+-- 2. COMPANIES
+CREATE TABLE IF NOT EXISTS public.companies (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id       UUID UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+    company_name  TEXT NOT NULL,
+    founder_name  TEXT,
+    is_active     BOOLEAN DEFAULT TRUE,
+    deleted_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
 
--- Users can manage their own data
-CREATE POLICY "Users can manage their own entries"
-    ON frp_entries
-    FOR ALL
-    TO authenticated
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+-- 3. WEEKLY SUBMISSIONS (Historical Backbone)
+CREATE TABLE IF NOT EXISTS public.weekly_submissions (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    company_id    UUID REFERENCES public.companies(id) ON DELETE CASCADE,
+    week_start    DATE NOT NULL,
+    
+    psf_score     INTEGER DEFAULT 0,
+    pmf_score     INTEGER DEFAULT 0,
+    gtm_score     INTEGER DEFAULT 0,
+    revenue_score INTEGER DEFAULT 0,
+    funding_score INTEGER DEFAULT 0,
+    
+    total_score   INTEGER DEFAULT 0,
+    
+    submitted_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    
+    UNIQUE(company_id, week_start)
+);
 
--- Admin can read/write ALL rows.
--- Added the correct email from the screenshot to ensure admin access.
-CREATE POLICY "Admin full access"
-    ON frp_entries
-    FOR ALL
-    TO authenticated
-    USING (
-        auth.jwt() ->> 'email' IN (
-            'pravinved613@gmail.com',
-            'pravindev666@gmail.com',
-            'admin@frp.in',
-            'admin@frp.dev'
-        )
+-- 4. ANSWERS (Granular Data)
+CREATE TABLE IF NOT EXISTS public.answers (
+    id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    submission_id  UUID REFERENCES public.weekly_submissions(id) ON DELETE CASCADE,
+    phase          TEXT NOT NULL,
+    pillar         TEXT NOT NULL,
+    score          INTEGER NOT NULL CHECK (score >= 0),
+    created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. AUDIT LOGS
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id     UUID,
+    action      TEXT NOT NULL, -- 'INSERT', 'UPDATE', 'DELETE'
+    entity      TEXT NOT NULL, -- 'weekly_submissions', 'answers', etc.
+    entity_id   UUID,
+    old_data    JSONB,
+    new_data    JSONB,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ─────────────────────────────────────────────────────────────
+-- AUTOMATION: AUTH SYNC
+-- ─────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.users (id, email)
+  VALUES (new.id, new.email);
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ─────────────────────────────────────────────────────────────
+-- AUTOMATION: AUDIT TRIGGER
+-- ─────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.audit_trigger_func()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        INSERT INTO public.audit_logs (user_id, action, entity, entity_id, old_data)
+        VALUES (auth.uid(), TG_OP, TG_TABLE_NAME, OLD.id, to_jsonb(OLD));
+        RETURN OLD;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO public.audit_logs (user_id, action, entity, entity_id, old_data, new_data)
+        VALUES (auth.uid(), TG_OP, TG_TABLE_NAME, NEW.id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'INSERT') THEN
+        INSERT INTO public.audit_logs (user_id, action, entity, entity_id, new_data)
+        VALUES (auth.uid(), TG_OP, TG_TABLE_NAME, NEW.id, to_jsonb(NEW));
+        RETURN NEW;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Attach audit to key tables
+CREATE TRIGGER audit_submissions_tg AFTER INSERT OR UPDATE OR DELETE ON public.weekly_submissions FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+CREATE TRIGGER audit_answers_tg AFTER INSERT OR UPDATE OR DELETE ON public.answers FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+
+-- ─────────────────────────────────────────────────────────────
+-- SECURITY: RLS
+-- ─────────────────────────────────────────────────────────────
+
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.weekly_submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.answers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- ADMIN POLICY
+CREATE POLICY "Admins have full access" ON public.users FOR ALL TO authenticated USING (role = 'admin');
+CREATE POLICY "Admins full access companies" ON public.companies FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin'));
+CREATE POLICY "Admins full access submissions" ON public.weekly_submissions FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin'));
+CREATE POLICY "Admins full access answers" ON public.answers FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin'));
+CREATE POLICY "Admins view audit" ON public.audit_logs FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin'));
+
+-- USER POLICY
+CREATE POLICY "Users view own data" ON public.users FOR SELECT TO authenticated USING (id = auth.uid());
+CREATE POLICY "Users manage own company" ON public.companies FOR ALL TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "Users manage own submissions" ON public.weekly_submissions FOR ALL TO authenticated USING (company_id IN (SELECT id FROM public.companies WHERE user_id = auth.uid()));
+CREATE POLICY "Users manage own answers" ON public.answers FOR ALL TO authenticated USING (
+    submission_id IN (
+        SELECT ws.id FROM public.weekly_submissions ws
+        JOIN public.companies c ON ws.company_id = c.id
+        WHERE c.user_id = auth.uid()
     )
-    WITH CHECK (
-        auth.jwt() ->> 'email' IN (
-            'pravinved613@gmail.com',
-            'pravindev666@gmail.com',
-            'admin@frp.in',
-            'admin@frp.dev'
-        )
-    );
+);
 
--- 3. Index for fast queries
-CREATE INDEX IF NOT EXISTS idx_frp_user_date ON frp_entries (user_id, entry_date DESC);
-CREATE INDEX IF NOT EXISTS idx_frp_phase     ON frp_entries (phase);
-
--- ============================================================
---  DONE. Now set these env vars in Streamlit Cloud:
---   SUPABASE_URL      = https://xxxx.supabase.co
---   SUPABASE_ANON_KEY = eyJ...
---   ADMIN_EMAIL       = admin@frp.in
--- ============================================================
+-- ─────────────────────────────────────────────────────────────
+-- INDEXES
+-- ─────────────────────────────────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_submissions_company_week ON public.weekly_submissions (company_id, week_start DESC);
+CREATE INDEX IF NOT EXISTS idx_answers_submission ON public.answers (submission_id);

@@ -588,95 +588,168 @@ def _save_dev_db(db):
             json.dump(db, f)
     except: pass
 
-def db_save_entry(user_id, company, founder, phase, pillar, value, week_date):
+# ─────────────────────────────────────────────
+# 🏢 COMPANIES
+# ─────────────────────────────────────────────
+
+def db_get_or_create_company(user_id, company_name, founder_name):
     if DEV_MODE:
-        db = _load_dev_db()
-        entry = {
-            "user_id": user_id, "company_name": company, "founder_name": founder,
-            "phase": phase, "pillar": pillar, "score_value": value,
-            "entry_date": str(week_date), "updated_at": datetime.utcnow().isoformat()
-        }
-        for i, row in enumerate(db):
-            if row["user_id"] == user_id and row["phase"] == phase and row["pillar"] == pillar and row["entry_date"] == str(week_date):
-                db[i] = entry
-                _save_dev_db(db)
-                return True
-        db.append(entry)
-        _save_dev_db(db)
+        return {"id": "dev-co-001", "company_name": company_name, "founder_name": founder_name}
+    
+    client = get_supabase()
+    if not client: return None
+    
+    try:
+        # Check if company exists
+        res = client.table("companies").select("*").eq("user_id", user_id).execute()
+        if res.data:
+            co = res.data[0]
+            # Update names if they changed
+            if co["company_name"] != company_name or co["founder_name"] != founder_name:
+                client.table("companies").update({
+                    "company_name": company_name, 
+                    "founder_name": founder_name
+                }).eq("id", co["id"]).execute()
+            return co
+            
+        # Create new
+        ins = client.table("companies").insert({
+            "user_id": user_id,
+            "company_name": company_name,
+            "founder_name": founder_name
+        }).execute()
+        return ins.data[0] if ins.data else None
+    except Exception as e:
+        st.error(f"Company Sync Error: {e}")
+        return None
+
+# ─────────────────────────────────────────────
+# 📅 SUBMISSIONS (Atomic)
+# ─────────────────────────────────────────────
+
+def db_save_full_submission(user_id, company_name, founder_name, week_start, answers_dict):
+    """
+    Saves a complete weekly snapshot. Atomic operation:
+    1. Upsert Company
+    2. Upsert Weekly Submission (Summary)
+    3. Replace Answers (Granular)
+    """
+    if DEV_MODE:
+        st.success("Dev Mode: Saved Snapshot")
         return True
 
     client = get_supabase()
     if not client: return False
     
-    # Direct Auth Sync: Pull user from the active session
     try:
-        session = client.auth.get_session()
-        if not session:
-            st.error("Authentication session lost. Please log out and back in.")
-            return False
+        # 1. Company
+        company = db_get_or_create_company(user_id, company_name, founder_name)
+        if not company: return False
+        cid = company["id"]
         
-        # Use the ID from the actual session to be safe
-        actual_uid = session.user.id 
+        # 2. Compute Phase Totals
+        phase_scores = {}
+        for ph in PHASE_ORDER:
+            total, _ = phase_score(ph, answers_dict.get(ph, {}))
+            phase_scores[ph] = total
+            
+        # 3. Upsert Submission Summary
+        sub_payload = {
+            "company_id": cid,
+            "week_start": str(week_start),
+            "psf_score": phase_scores.get("PSF", 0),
+            "pmf_score": phase_scores.get("PMF", 0),
+            "gtm_score": phase_scores.get("GTM", 0),
+            "revenue_score": phase_scores.get("Revenue", 0),
+            "funding_score": phase_scores.get("Funding", 0),
+            "updated_at": datetime.utcnow().isoformat()
+        }
         
-        client.table("frp_entries").upsert({
-            "user_id": actual_uid, 
-            "company_name": company, 
-            "founder_name": founder,
-            "phase": phase, "pillar": pillar, "score_value": value,
-            "entry_date": str(week_date), "updated_at": datetime.utcnow().isoformat(),
-        }, on_conflict="user_id,phase,pillar,entry_date").execute()
+        sub_res = client.table("weekly_submissions").upsert(sub_payload, on_conflict="company_id,week_start").execute()
+        if not sub_res.data: return False
+        sid = sub_res.data[0]["id"]
+        
+        # 4. Replace Answers (Granular)
+        # Delete old answers for this submission to keep it clean
+        client.table("answers").delete().eq("submission_id", sid).execute()
+        
+        answer_rows = []
+        for phase, pillars in answers_dict.items():
+            for pillar, score in pillars.items():
+                answer_rows.append({
+                    "submission_id": sid,
+                    "phase": phase,
+                    "pillar": pillar,
+                    "score": score
+                })
+        
+        if answer_rows:
+            client.table("answers").insert(answer_rows).execute()
+            
         return True
     except Exception as e:
-        st.error(f"Database Error: {e}")
+        st.error(f"Save Error: {e}")
         return False
 
-def db_load_entries(user_id, entry_date=None):
-    if DEV_MODE:
-        return [row for row in _load_dev_db() if row["user_id"] == user_id and (not entry_date or row["entry_date"] == str(entry_date))]
-    
+def db_load_user_history(user_id):
+    """Loads all historical submissions for a user."""
+    if DEV_MODE: return []
     client = get_supabase()
     if not client: return []
+    
     try:
-        q = client.table("frp_entries").select("*").eq("user_id", user_id)
-        if entry_date: q = q.eq("entry_date", str(entry_date))
-        return q.execute().data or []
+        # Complex join via RPC or explicit join
+        # For simplicity in this step, we fetch submissions for the user's company
+        res = client.table("weekly_submissions")\
+            .select("*, companies!inner(user_id)")\
+            .eq("companies.user_id", user_id)\
+            .order("week_start", desc=True)\
+            .execute()
+        return res.data or []
     except:
         return []
 
-def db_load_all_companies():
-    if DEV_MODE: return _load_dev_db()
+def db_load_full_answers(submission_id):
+    """Loads granular answers for a specific submission."""
+    if DEV_MODE: return []
     client = get_supabase()
     if not client: return []
     try:
-        res = client.table("frp_entries").select("user_id,company_name,founder_name,entry_date,phase,pillar,score_value").execute()
+        res = client.table("answers").select("*").eq("submission_id", submission_id).execute()
         return res.data or []
-    except Exception as e:
-        print(f"Error loading all companies: {e}")
+    except: return []
+
+# ─────────────────────────────────────────────
+# 🧑💼 ADMIN DATA
+# ─────────────────────────────────────────────
+
+def db_load_admin_cohort_data():
+    """Loads latest submission for every company."""
+    if DEV_MODE: return []
+    client = get_supabase()
+    if not client: return []
+    try:
+        # Get all companies and their latest submission
+        # Use a join to get company names
+        res = client.table("weekly_submissions")\
+            .select("*, companies(company_name, founder_name, user_id)")\
+            .order("week_start", desc=True)\
+            .execute()
+        return res.data or []
+    except:
         return []
 
-def db_delete_company(user_id):
-    """Delete all entries for a specific user/company (Admin only)"""
-    if DEV_MODE:
-        db = _load_dev_db()
-        original_count = len(db)
-        db = [row for row in db if row["user_id"] != user_id]
-        deleted_count = original_count - len(db)
-        _save_dev_db(db)
-        return True, deleted_count
-    
+def db_delete_company(company_id):
+    """Soft delete or Hard delete based on preference. Here: Hard Delete."""
+    if DEV_MODE: return True, 1
     client = get_supabase()
     if not client: return False, 0
     try:
-        # Perform delete and get the count of rows removed
-        res = client.table("frp_entries").delete().eq("user_id", user_id).execute()
-        # In supabase-py, res.data contains the deleted rows
-        deleted_count = len(res.data) if res.data else 0
-        return True, deleted_count
+        res = client.table("companies").delete().eq("id", company_id).execute()
+        return True, len(res.data)
     except Exception as e:
         st.error(f"Delete Error: {e}")
         return False, 0
-
-def db_get_weeks(user_id):
     if DEV_MODE:
         return sorted(set(r["entry_date"] for r in _load_dev_db() if r["user_id"] == user_id))
     client = get_supabase()
@@ -1030,18 +1103,22 @@ def show_phase_input(phase_key):
             if not st.session_state.company or not st.session_state.founder:
                 st.error("Set Company & Founder name in sidebar first.")
             else:
-                ok_all = True
-                for pillar, val in ph_answers.items():
-                    ok = db_save_entry(uid, st.session_state.company, st.session_state.founder,
-                                       phase_key, pillar, val, st.session_state.selected_week)
-                    if not ok: ok_all = False
-                if ok_all:
-                    st.success(f"✅ {phase_key} saved for {st.session_state.selected_week}. Please click the next tab above to continue.")
+                # Use the new atomic submission service
+                ok = db_save_full_submission(
+                    user_id=uid,
+                    company_name=st.session_state.company,
+                    founder_name=st.session_state.founder,
+                    week_start=st.session_state.selected_week,
+                    answers_dict=st.session_state.answers
+                )
+                
+                if ok:
+                    st.success(f"✅ Full assessment saved for {st.session_state.selected_week}.")
                     st.balloons()
-                    time.sleep(2.5) # Allow balloons to fly and message to be read
+                    time.sleep(2.5)
                     st.rerun()
                 else:
-                    st.warning("Saved locally. Check Supabase connection.")
+                    st.error("Failed to save to cloud. Please check your connection.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ANALYTICS TAB
@@ -1051,19 +1128,18 @@ def show_analytics(uid=None, company_override=None):
     company    = company_override or st.session_state.company
     founder    = st.session_state.founder
 
-    # Load all entries from DB
-    all_entries = db_load_entries(target_uid) if target_uid else []
+    # Load historical submissions
+    history = db_load_user_history(target_uid) if target_uid else []
+    
+    # Get the latest submission for initial display if session is empty
+    latest_sub = history[0] if history else None
+    
+    # If session state is empty, pre-fill from latest DB submission
+    if not any(st.session_state.answers.values()) and latest_sub:
+        granular = db_load_full_answers(latest_sub["id"])
+        for ans in granular:
+            st.session_state.answers.setdefault(ans["phase"], {})[ans["pillar"]] = ans["score"]
 
-    # Merge DB entries with current session answers for latest week
-    answers = {}
-    for row in all_entries:
-        ph  = row["phase"]
-        pil = row["pillar"]
-        val = row["score_value"]
-        dt  = row["entry_date"]
-        answers.setdefault(ph, {}).setdefault(pil, {})[dt] = val
-
-    # Current answers from session
     session_answers = st.session_state.answers
 
     st.markdown(f"""
@@ -1335,109 +1411,76 @@ def show_admin_cohort_view():
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("🔄 Refresh Dashboard", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
-
-    all_data = db_load_all_companies()
-    if not all_data:
-        st.info("No data yet. Founders need to submit their weekly entries first.")
+    # ── RELATIONAL DATA FETCH ──
+    all_submissions = db_load_admin_cohort_data()
+    if not all_submissions:
+        st.info("No submissions found yet.")
         return
 
-    # Build company index
-    df = pd.DataFrame(all_data)
-    companies = df.drop_duplicates(subset=["user_id"])[["user_id", "company_name", "founder_name"]].to_dict("records")
+    # Process data for visualization
+    seen_companies = set()
+    latest_cohort = []
+    for sub in all_submissions:
+        cid = sub["company_id"]
+        if cid not in seen_companies:
+            co_info = sub["companies"]
+            latest_cohort.append({
+                "company_id": cid,
+                "user_id": co_info["user_id"],
+                "company_name": co_info["company_name"],
+                "founder_name": co_info["founder_name"],
+                "week_start": sub["week_start"],
+                "total_score": sub["total_score"],
+                "PSF": sub["psf_score"],
+                "PMF": sub["pmf_score"],
+                "GTM": sub["gtm_score"],
+                "Revenue": sub["revenue_score"],
+                "Funding": sub["funding_score"],
+            })
+            seen_companies.add(cid)
 
-    # Compute latest score per company
-    def latest_score(uid):
-        rows = [r for r in all_data if r["user_id"] == uid]
-        total = 0
-        max_t = sum(sum(pd["max"] for pd in PHASES[ph]["pillars"].values()) for ph in PHASE_ORDER)
-        seen = {}
-        for r in rows:
-            key = (r["phase"], r["pillar"])
-            if key not in seen or r["entry_date"] > seen[key][0]:
-                seen[key] = (r["entry_date"], r["score_value"])
-        total = sum(v for _, v in seen.values())
-        return total, max_t
-
-    # ── Master CSV Export ──
-    master_rows = []
-    for c in companies:
-        uid = c["user_id"]
-        t, mx = latest_score(uid)
-        row = {"user_id": uid, "Company": c["company_name"], "Founder": c["founder_name"], "Overall Readiness %": int(t/mx*100) if mx else 0}
-        
-        # Add phase-specific columns
-        for ph in PHASE_ORDER:
-            ph_max = sum(v["max"] for v in PHASES[ph]["pillars"].values())
-            ph_rows = [r for r in all_data if r["user_id"] == uid and r["phase"] == ph]
-            ph_seen = {}
-            for r in ph_rows:
-                if r["pillar"] not in ph_seen or r["entry_date"] > ph_seen[r["pillar"]][0]:
-                    ph_seen[r["pillar"]] = (r["entry_date"], r["score_value"])
-            ph_score = sum(v for _, v in ph_seen.values())
-            row[f"{ph} %"] = int(ph_score/ph_max*100) if ph_max else 0
-        master_rows.append(row)
+    df_cohort = pd.DataFrame(latest_cohort)
     
-    master_df = pd.DataFrame(master_rows)
+    # ── COHORT WEAKNESS HEATMAP ──
+    st.markdown("### 🌡️ Cohort Weakness Heatmap")
+    st.markdown('<p style="font-size:0.8rem; color:#64748b;">Instantly see which phases founders are struggling with across the whole cohort.</p>', unsafe_allow_html=True)
     
-    col_t1, col_t2 = st.columns([4, 1])
-    with col_t2:
-        st.download_button(
-            "📥 Export Master CSV",
-            data=master_df.to_csv(index=False),
-            file_name=f"FRP_Cohort_Report_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="admin_master_export"
-        )
+    heatmap_df = df_cohort.set_index("company_name")[PHASE_ORDER]
+    fig_heat = px.imshow(
+        heatmap_df,
+        labels=dict(x="Phase", y="Company", color="Score"),
+        color_continuous_scale="RdYlGn",
+        aspect="auto"
+    )
+    fig_heat.update_layout(height=max(300, len(latest_cohort)*30), margin=dict(l=20, r=20, t=20, b=20))
+    st.plotly_chart(fig_heat, use_container_width=True, config={'displayModeBar': False})
 
-    # ── Stats row ──
-    total_cos = len(companies)
-    avg_pct = master_df["Overall Readiness %"].mean() if not master_df.empty else 0
-
+    # ── STATS CARDS ──
+    avg_score = df_cohort["total_score"].mean()
     c1, c2, c3 = st.columns(3)
-    for col, val, lbl in [(c1, total_cos, "Total Companies"), (c2, f"{avg_pct:.0f}%", "Avg Cohort Readiness"), (c3, "90", "Day Program")]:
-        col.markdown(f"""<div class="stat"><div class="stat-val">{val}</div>
-        <div class="stat-lbl">{lbl}</div></div>""", unsafe_allow_html=True)
+    c1.metric("Total Companies", len(latest_cohort))
+    c2.metric("Avg Cohort Score", f"{avg_score:.1f}")
+    c3.metric("Latest Submission", max(sub["week_start"] for sub in all_submissions))
 
-    st.markdown("---")
+    # ── SEARCH & FILTERS ──
+    search = st.text_input("🔍 Search Founder or Company", placeholder="Filter list...")
     
-    st.markdown("---")
-    
-    # ── Search & Smart Filters ──
-    st.markdown("### 🔍 Search & Filters")
-    c_f1, c_f2 = st.columns([2, 1])
-    with c_f1:
-        search = st.text_input("Type company or founder name", placeholder="Search...", label_visibility="collapsed")
-    with c_f2:
-        filter_mode = st.radio("Status Filter", ["All", "🏆 Top", "⚠️ At Risk"], horizontal=True, label_visibility="collapsed")
+    filtered = df_cohort
+    if search:
+        filtered = df_cohort[
+            df_cohort["company_name"].str.contains(search, case=False) | 
+            df_cohort["founder_name"].str.contains(search, case=False)
+        ]
 
-    # Apply search
-    filtered = [c for c in companies if
-                search.lower() in c["company_name"].lower() or
-                search.lower() in c["founder_name"].lower()] if search else companies
-    
-    # Apply status filters
-    final_list = []
-    for co in filtered:
-        uid = co["user_id"]
-        # Use master_df for quick lookups
-        t, mx = latest_score(uid)
-        pct = int(t/mx*100) if mx else 0
-        
-        if filter_mode == "🏆 Top" and pct < 75: continue
-        if filter_mode == "⚠️ At Risk" and pct >= 40: continue
-        
-        co["pct"] = pct
-        final_list.append(co)
 
     # Company list
     st.markdown(f"### 🏢 Companies ({len(final_list)})")
-    for co in final_list:
-        uid    = co["user_id"]
-        pct    = co["pct"]
+    for co in filtered.to_dict("records"):
+        cid    = co["company_id"]
+        score  = co["total_score"]
+        # Max theoretical score
+        max_t = sum(sum(pd["max"] for pd in PHASES[ph]["pillars"].values()) for ph in PHASE_ORDER)
+        pct    = int(score/max_t*100) if max_t else 0
         color  = score_color(pct)
 
         col_a, col_spark, col_b, col_c, col_d = st.columns([3, 2, 1, 1, 0.6])
@@ -1447,19 +1490,17 @@ def show_admin_cohort_view():
         <div>
             <div class="tp" style="font-weight:700;font-size:1.1rem;color:#1e293b;">{co['company_name']}</div>
             <div class="tm" style="font-size:0.8rem;color:#64748b;">👤 {co['founder_name']}</div>
+            <div style="font-size:0.7rem; color:#94a3b8;">Latest: {co['week_start']}</div>
         </div>
         """, unsafe_allow_html=True)
         
         # Column Spark: Trajectory
         with col_spark:
-            user_rows = [r for r in all_data if r["user_id"] == uid]
-            if user_rows:
-                df_u = pd.DataFrame(user_rows)
-                daily = df_u.groupby("entry_date")["score_value"].sum().reset_index()
-                daily = daily.sort_values("entry_date")
-                
-                # Plotly Sparkline
-                fig_spark = px.line(daily, x="entry_date", y="score_value")
+            # Load historical trend for this company
+            co_history = [s for s in all_submissions if s["company_id"] == cid]
+            if co_history:
+                df_h = pd.DataFrame(co_history).sort_values("week_start")
+                fig_spark = px.line(df_h, x="week_start", y="total_score")
                 fig_spark.update_layout(
                     height=40, width=120, margin=dict(l=5, r=5, t=5, b=5),
                     xaxis_visible=False, yaxis_visible=False,
@@ -1477,33 +1518,27 @@ def show_admin_cohort_view():
         """, unsafe_allow_html=True)
         
         # Column C: Action
-        if col_c.button("View →", key=f"view_{uid}", use_container_width=True):
+        if col_c.button("View →", key=f"view_{cid}", use_container_width=True):
             st.session_state.admin_target = co
             st.rerun()
 
         # Column D: Delete
-        if col_d.button("🗑️", key=f"del_{uid}", help=f"Delete ALL data for {co['company_name']}"):
-            st.session_state[f"confirm_delete_{uid}"] = True
+        if col_d.button("🗑️", key=f"del_{cid}", help=f"Delete ALL data for {co['company_name']}"):
+            st.session_state[f"confirm_delete_{cid}"] = True
 
         # Inline confirmation
-        if st.session_state.get(f"confirm_delete_{uid}"):
+        if st.session_state.get(f"confirm_delete_{cid}"):
             st.error(f"Permanently delete ALL data for **{co['company_name']}**?")
             c_del1, c_del2 = st.columns(2)
-            if c_del1.button("Confirm Delete", key=f"y_del_{uid}", type="primary", use_container_width=True):
-                success, count = db_delete_company(uid)
+            if c_del1.button("Confirm Delete", key=f"y_del_{cid}", type="primary", use_container_width=True):
+                success, count = db_delete_company(cid)
                 if success:
-                    if count > 0:
-                        st.success(f"Successfully deleted {count} entries for {co['company_name']}.")
-                    else:
-                        st.warning(f"No entries found for {co['company_name']} in the database.")
-                    
-                    # Clean up state
-                    del st.session_state[f"confirm_delete_{uid}"]
-                    # Small sleep to let the user see the success message
+                    st.success(f"Successfully deleted {co['company_name']}.")
+                    del st.session_state[f"confirm_delete_{cid}"]
                     time.sleep(1.5)
                     st.rerun()
-            if c_del2.button("Cancel", key=f"n_del_{uid}", use_container_width=True):
-                del st.session_state[f"confirm_delete_{uid}"]
+            if c_del2.button("Cancel", key=f"n_del_{cid}", use_container_width=True):
+                del st.session_state[f"confirm_delete_{cid}"]
                 st.rerun()
 
         st.divider()

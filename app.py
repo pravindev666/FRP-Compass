@@ -764,8 +764,19 @@ def signup_success_dialog():
     </div>
     """, unsafe_allow_html=True)
     if st.button("Close & Go to Login", use_container_width=True, type="primary"):
-        # Reset user in session state so they stay on auth page to log in
         st.session_state.user = None
+        st.rerun()
+
+@st.dialog("Welcome to FRP!")
+def signup_welcome_dialog():
+    st.markdown("""
+    <div style="text-align:center;">
+        <h2 style="font-size:3rem; margin-bottom:1rem;">🎉</h2>
+        <p style="font-size:1.2rem; font-weight:600; color:#10b981;">Account Created Successfully!</p>
+        <p style="font-size:1rem; margin-top:0.5rem;">Welcome to the Founder Readiness Program. Your journey starts now.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.button("🚀 Enter Dashboard", use_container_width=True, type="primary"):
         st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -840,7 +851,12 @@ def show_auth():
                         if is_admin:
                             st.success("Admin account created! 📧 Please check your email (if enabled) and then Login.")
                         else:
-                            signup_success_dialog()
+                            if session:
+                                # Email verification is OFF, user is logged in
+                                signup_welcome_dialog()
+                            else:
+                                # Email verification is ON, user needs to verify
+                                signup_success_dialog()
                     else:
                         st.error(f"Signup failed: {err}")
 

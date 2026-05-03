@@ -34,6 +34,7 @@ class _DevUser:
         self.email = email
 
 # ── Supabase Setup ──
+from supabase import create_client, Client
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 ADMIN_EMAIL  = os.environ.get("ADMIN_EMAIL", "admin@frp.dev")
@@ -606,15 +607,27 @@ def db_save_entry(user_id, company, founder, phase, pillar, value, week_date):
 
     client = get_supabase()
     if not client: return False
+    
+    # Direct Auth Sync: Pull user from the active session
     try:
+        session = client.auth.get_session()
+        if not session:
+            st.error("Authentication session lost. Please log out and back in.")
+            return False
+        
+        # Use the ID from the actual session to be safe
+        actual_uid = session.user.id 
+        
         client.table("frp_entries").upsert({
-            "user_id": user_id, "company_name": company, "founder_name": founder,
+            "user_id": actual_uid, 
+            "company_name": company, 
+            "founder_name": founder,
             "phase": phase, "pillar": pillar, "score_value": value,
             "entry_date": str(week_date), "updated_at": datetime.utcnow().isoformat(),
         }, on_conflict="user_id,phase,pillar,entry_date").execute()
         return True
     except Exception as e:
-        st.error(f"Save error: {e}")
+        st.error(f"Database Error: {e}")
         return False
 
 def db_load_entries(user_id, entry_date=None):

@@ -718,6 +718,8 @@ def show_auth():
                         st.error(f"Login failed: {err}")
                 else:
                     st.warning("Enter email and password.")
+            
+            st.markdown('<p style="text-align:center;font-size:0.8rem;margin-top:1rem;color:#64748b;">Forgot Password? Please contact your program administrator.</p>', unsafe_allow_html=True)
 
         with tab_signup:
             s_email = st.text_input("Email", key="su_email", placeholder="founder@startup.in")
@@ -733,7 +735,7 @@ def show_auth():
                 else:
                     user, err = signup_user(s_email, s_pwd)
                     if user:
-                        st.success("Account created! Please login.")
+                        st.success("Account created! 📧 Please check your email and click the confirmation link before logging in. (If the link opens a blank page, you can close it and return here to log in).")
                     else:
                         st.error(f"Signup failed: {err}")
 

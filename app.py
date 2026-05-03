@@ -678,7 +678,7 @@ def init_session():
         "active_phase": "PSF",
         "selected_week": str(date.today()),
         "admin_target": None,
-        "theme": "dark",
+        "theme": "light",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -982,7 +982,19 @@ def show_analytics(uid=None, company_override=None):
     
     col_print, col_dl = st.columns([4, 2])
     with col_print:
-        st.info("💡 **Tip:** Press **Ctrl+P** (or Cmd+P) to save this dashboard as a beautifully formatted PDF report.", icon="🖨️")
+        # Integrated PDF Download Button via iframe hack
+        import streamlit.components.v1 as components
+        components.html(
+            """
+            <div style="display: flex; align-items: center; height: 100%; font-family: sans-serif;">
+                <button onclick="window.parent.print()" style="background:#4f46e5;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;box-shadow:0 1px 3px rgba(0,0,0,0.1);transition:background 0.2s;">
+                    🖨️ Download PDF Report
+                </button>
+                <span style="color:#64748b;font-size:12px;margin-left:12px;">Generates a clean PDF of this dashboard.</span>
+            </div>
+            """,
+            height=50
+        )
     
     with col_dl:
         if all_entries:

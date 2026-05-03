@@ -1,5 +1,5 @@
 -- ============================================================
---  FRP Compass - Production Grade Schema (HARDENED)
+--  FRP Compass - Production Grade Schema (HARDENED v2)
 -- ============================================================
 
 -- 0. EXTENSIONS
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS public.answers (
     submission_id  UUID REFERENCES public.weekly_submissions(id) ON DELETE CASCADE,
     phase          TEXT NOT NULL,
     pillar         TEXT NOT NULL,
-    score          INTEGER NOT NULL CHECK (score >= 0 AND score <= 100), -- Added safety bound
+    score          INTEGER NOT NULL CHECK (score >= 0 AND score <= 100),
     created_at     TIMESTAMPTZ DEFAULT NOW(),
     updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
@@ -66,6 +66,21 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
     new_data    JSONB,
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ─────────────────────────────────────────────────────────────
+-- AUTOMATION: SECURITY GUARD (Fixes Infinite Recursion)
+-- ─────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN (
+    SELECT role = 'admin'
+    FROM public.users
+    WHERE id = auth.uid()
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ─────────────────────────────────────────────────────────────
 -- AUTOMATION: AUTO-COMPUTE TOTAL SCORE
@@ -111,7 +126,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS audit_submissions_tg ON public.weekly_submissions;
 CREATE TRIGGER audit_submissions_tg AFTER INSERT OR UPDATE OR DELETE ON public.weekly_submissions FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+
+DROP TRIGGER IF EXISTS audit_answers_tg ON public.answers;
 CREATE TRIGGER audit_answers_tg AFTER INSERT OR UPDATE OR DELETE ON public.answers FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
 -- ─────────────────────────────────────────────────────────────
@@ -124,24 +142,34 @@ ALTER TABLE public.weekly_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.answers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
--- FIXED ADMIN POLICIES (Addressing Audit #13)
-CREATE POLICY "Admins full access users" ON public.users FOR ALL TO authenticated 
-    USING ((SELECT role FROM public.users WHERE id = auth.uid()) = 'admin');
+-- ADMIN POLICIES (Using the is_admin() function to prevent loop)
+DROP POLICY IF EXISTS "Admins full access users" ON public.users;
+CREATE POLICY "Admins full access users" ON public.users FOR ALL TO authenticated USING (public.is_admin());
 
-CREATE POLICY "Admins full access companies" ON public.companies FOR ALL TO authenticated 
-    USING ((SELECT role FROM public.users WHERE id = auth.uid()) = 'admin');
+DROP POLICY IF EXISTS "Admins full access companies" ON public.companies;
+CREATE POLICY "Admins full access companies" ON public.companies FOR ALL TO authenticated USING (public.is_admin());
 
-CREATE POLICY "Admins full access submissions" ON public.weekly_submissions FOR ALL TO authenticated 
-    USING ((SELECT role FROM public.users WHERE id = auth.uid()) = 'admin');
+DROP POLICY IF EXISTS "Admins full access submissions" ON public.weekly_submissions;
+CREATE POLICY "Admins full access submissions" ON public.weekly_submissions FOR ALL TO authenticated USING (public.is_admin());
 
-CREATE POLICY "Admins full access answers" ON public.answers FOR ALL TO authenticated 
-    USING ((SELECT role FROM public.users WHERE id = auth.uid()) = 'admin');
+DROP POLICY IF EXISTS "Admins full access answers" ON public.answers;
+CREATE POLICY "Admins full access answers" ON public.answers FOR ALL TO authenticated USING (public.is_admin());
+
+DROP POLICY IF EXISTS "Admins full access audit" ON public.audit_logs;
+CREATE POLICY "Admins full access audit" ON public.audit_logs FOR ALL TO authenticated USING (public.is_admin());
 
 -- USER POLICIES
+DROP POLICY IF EXISTS "Users view own data" ON public.users;
 CREATE POLICY "Users view own data" ON public.users FOR SELECT TO authenticated USING (id = auth.uid());
+
+DROP POLICY IF EXISTS "Users manage own company" ON public.companies;
 CREATE POLICY "Users manage own company" ON public.companies FOR ALL TO authenticated USING (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users manage own submissions" ON public.weekly_submissions;
 CREATE POLICY "Users manage own submissions" ON public.weekly_submissions FOR ALL TO authenticated 
     USING (company_id IN (SELECT id FROM public.companies WHERE user_id = auth.uid()));
+
+DROP POLICY IF EXISTS "Users manage own answers" ON public.answers;
 CREATE POLICY "Users manage own answers" ON public.answers FOR ALL TO authenticated 
     USING (submission_id IN (
         SELECT ws.id FROM public.weekly_submissions ws 
@@ -153,5 +181,22 @@ CREATE POLICY "Users manage own answers" ON public.answers FOR ALL TO authentica
 -- INDEXES
 -- ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_submissions_company_week ON public.weekly_submissions (company_id, week_start DESC);
-CREATE INDEX IF NOT EXISTS idx_submissions_week ON public.weekly_submissions (week_start DESC); -- Addressing Audit #10
+CREATE INDEX IF NOT EXISTS idx_submissions_week ON public.weekly_submissions (week_start DESC);
 CREATE INDEX IF NOT EXISTS idx_answers_submission ON public.answers (submission_id);
+
+-- ─────────────────────────────────────────────────────────────
+-- FINAL SYNC & ADMIN PROMOTION (Audit #14 Fix)
+-- ─────────────────────────────────────────────────────────────
+
+-- 1. Sync all existing founders from Supabase Auth
+INSERT INTO public.users (id, email)
+SELECT id, email FROM auth.users
+ON CONFLICT (id) DO NOTHING;
+
+-- 2. Promote specific Admin
+UPDATE public.users 
+SET role = 'admin' 
+WHERE email = 'pravindev666@gmail.com';
+
+-- 3. Verify
+SELECT * FROM public.users;

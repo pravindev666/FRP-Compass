@@ -1474,11 +1474,10 @@ def show_admin_cohort_view():
     st.plotly_chart(fig_heat, use_container_width=True, config={'displayModeBar': False})
 
     # ── STATS CARDS ──
-    avg_score = df_cohort["total_score"].mean()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Companies", len(latest_cohort))
-    c2.metric("Avg Cohort Score", f"{avg_score:.1f}")
-    c3.metric("Latest Submission", max(sub["week_start"] for sub in all_submissions))
+    c1, c2 = st.columns(2)
+    c1.metric("🏢 Total Companies", len(latest_cohort))
+    c3_date = max(sub["week_start"] for sub in all_submissions)
+    c2.metric("📅 Latest Submission", str(c3_date))
 
     # ── SEARCH & FILTERS ──
     search = st.text_input("🔍 Search Founder or Company", placeholder="Filter list...")

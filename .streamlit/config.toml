@@ -1,0 +1,8 @@
+[theme]
+# Base MUST be "light" so Streamlit's dark theme doesn't fight our CSS.
+# All visual theming is handled by build_css() in app.py.
+base = "light"
+font = "sans serif"
+
+[server]
+runOnSave = true

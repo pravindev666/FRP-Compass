@@ -1,0 +1,69 @@
+{
+  "company": "MindWed",
+  "founder": "Pravin",
+  "export_date": "2026-05-03T13:28:50.294117",
+  "answers": {
+    "PSF": {
+      "Customer Discovery": 15,
+      "Solution Validation": 15,
+      "Early Traction": 30,
+      "Product Iteration": 10,
+      "Compliance & Docs": 10
+    },
+    "PMF": {
+      "ICP Sharpening": 15,
+      "Channel Validation": 20,
+      "Revenue Growth": 20,
+      "Retention & Expansion": 5,
+      "Operational Readiness": 10
+    },
+    "GTM": {
+      "ICP & Customer Segments": 20,
+      "Channel Performance": 20,
+      "Pipeline & Conversion": 20,
+      "Pricing & Revenue Growth": 10,
+      "Operations & Fulfilment": 8
+    },
+    "Revenue": {
+      "Pricing Clarity": 25,
+      "Revenue Streams": 25,
+      "Unit Economics": 25,
+      "Recurring Revenue": 0,
+      "Financial Forecasting": 10
+    },
+    "Funding": {
+      "Revenue Performance": 25,
+      "Unit Economics": 25,
+      "Financial Hygiene": 20,
+      "Fundraising Readiness": 20,
+      "Capital Readiness": 10
+    }
+  },
+  "phase_scores": {
+    "PSF": {
+      "total": 80,
+      "max": 100,
+      "status": "Strong PSF \u2013 Ready for PMF Push"
+    },
+    "PMF": {
+      "total": 70,
+      "max": 100,
+      "status": "Good Progress"
+    },
+    "GTM": {
+      "total": 78,
+      "max": 100,
+      "status": "GTM Working"
+    },
+    "Revenue": {
+      "total": 85,
+      "max": 100,
+      "status": "Revenue Model Validated"
+    },
+    "Funding": {
+      "total": 100,
+      "max": 100,
+      "status": "Fund Ready"
+    }
+  }
+}

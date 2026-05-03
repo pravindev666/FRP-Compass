@@ -694,6 +694,10 @@ def show_auth():
         <p>PSF → PMF → GTM → Revenue → Funding</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    col_theme, _ = st.columns([1, 4])
+    with col_theme:
+        _sidebar_theme_toggle()
 
     col = st.columns([1, 2, 1])[1]
     with col:

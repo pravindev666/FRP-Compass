@@ -1481,26 +1481,26 @@ def show_admin_cohort_view():
         if col_d.button("🗑️", key=f"del_{uid}", help=f"Delete ALL data for {co['company_name']}"):
             st.session_state[f"confirm_delete_{uid}"] = True
 
-                # Inline confirmation
-                if st.session_state.get(f"confirm_delete_{uid}"):
-                    st.error(f"Permanently delete ALL data for **{co['company_name']}**?")
-                    c_del1, c_del2 = st.columns(2)
-                    if c_del1.button("Confirm Delete", key=f"y_del_{uid}", type="primary", use_container_width=True):
-                        success, count = db_delete_company(uid)
-                        if success:
-                            if count > 0:
-                                st.success(f"Successfully deleted {count} entries for {co['company_name']}.")
-                            else:
-                                st.warning(f"No entries found for {co['company_name']} in the database.")
-                            
-                            # Clean up state
-                            del st.session_state[f"confirm_delete_{uid}"]
-                            # Small sleep to let the user see the success message
-                            time.sleep(1.5)
-                            st.rerun()
-                    if c_del2.button("Cancel", key=f"n_del_{uid}", use_container_width=True):
-                        del st.session_state[f"confirm_delete_{uid}"]
-                        st.rerun()
+        # Inline confirmation
+        if st.session_state.get(f"confirm_delete_{uid}"):
+            st.error(f"Permanently delete ALL data for **{co['company_name']}**?")
+            c_del1, c_del2 = st.columns(2)
+            if c_del1.button("Confirm Delete", key=f"y_del_{uid}", type="primary", use_container_width=True):
+                success, count = db_delete_company(uid)
+                if success:
+                    if count > 0:
+                        st.success(f"Successfully deleted {count} entries for {co['company_name']}.")
+                    else:
+                        st.warning(f"No entries found for {co['company_name']} in the database.")
+                    
+                    # Clean up state
+                    del st.session_state[f"confirm_delete_{uid}"]
+                    # Small sleep to let the user see the success message
+                    time.sleep(1.5)
+                    st.rerun()
+            if c_del2.button("Cancel", key=f"n_del_{uid}", use_container_width=True):
+                del st.session_state[f"confirm_delete_{uid}"]
+                st.rerun()
 
         st.divider()
 

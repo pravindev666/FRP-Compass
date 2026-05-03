@@ -632,6 +632,33 @@ def db_get_weeks(user_id):
     except:
         return []
 
+def restore_user_session(user_id):
+    """Fetch the most recent entry from DB and restore session state."""
+    entries = db_load_entries(user_id)
+    if not entries:
+        return
+    
+    # Sort by date descending
+    df = pd.DataFrame(entries)
+    df["entry_date"] = pd.to_datetime(df["entry_date"])
+    latest_date = df["entry_date"].max()
+    latest_rows = df[df["entry_date"] == latest_date]
+    
+    # Restore basic info
+    first_row = latest_rows.iloc[0]
+    st.session_state.company = first_row.get("company_name", "")
+    st.session_state.founder = first_row.get("founder_name", "")
+    st.session_state.selected_week = latest_date.strftime("%Y-%m-%d")
+    
+    # Restore answers for all weeks (to populate analytics)
+    # Answers structure: {phase: {pillar: score}}
+    new_answers = {}
+    # We actually only want to pre-fill the form with the LATEST week's answers
+    for _, row in latest_rows.iterrows():
+        new_answers.setdefault(row["phase"], {})[row["pillar"]] = row["score_value"]
+    
+    st.session_state.answers = new_answers
+
 def login_user(email, password):
     # ── Dev mode: check dummy credentials ──
     if DEV_MODE:
@@ -720,6 +747,9 @@ def show_auth():
                             st.session_state.sb_access_token = session.access_token
                             st.session_state.sb_refresh_token = session.refresh_token
                         
+                        # Automatically restore data from DB
+                        restore_user_session(user.id)
+                        
                         # Support multiple admins separated by commas
                         admin_list = [a.strip().lower() for a in ADMIN_EMAIL.split(',')]
                         st.session_state.is_admin = (email.lower() in admin_list)
@@ -750,6 +780,10 @@ def show_auth():
                         if session:
                             st.session_state.sb_access_token = session.access_token
                             st.session_state.sb_refresh_token = session.refresh_token
+                        
+                        # Restore (likely empty for new signup but good for consistency)
+                        restore_user_session(user.id)
+                        
                         # Immediately check if this new user should be an admin
                         admin_list = [a.strip().lower() for a in ADMIN_EMAIL.split(',')]
                         is_admin = (s_email.lower() in admin_list)
@@ -864,7 +898,7 @@ def show_phase_input(phase_key):
         cur_opt = next((o[0] for o in pdata["options"] if o[1] == cur_val), opts[0])
 
         chosen = st.radio(
-            f"",
+            f"Select option for {pillar}",
             opts,
             index=opts.index(cur_opt),
             key=f"radio_{phase_key}_{pillar}",

@@ -1335,6 +1335,10 @@ def show_admin_cohort_view():
     </div>
     """, unsafe_allow_html=True)
 
+    if st.button("🔄 Refresh Dashboard", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+
     all_data = db_load_all_companies()
     if not all_data:
         st.info("No data yet. Founders need to submit their weekly entries first.")
